@@ -160,7 +160,7 @@ impl RiskState {
         }
         // Staleness: no head at all, or head older than tolerated.
         match (head, self.last_head) {
-            (Some(h), Some(last)) if h + max_head_age >= last => {}
+            (Some(h), Some(last)) if h.saturating_add(max_head_age) >= last => {}
             (Some(_), Some(_)) => return Err(RiskError::StaleData),
             (None, _) => return Err(RiskError::StaleData),
             (Some(h), None) => {

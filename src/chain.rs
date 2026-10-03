@@ -40,9 +40,12 @@ pub trait BlockFeed: Send {
     /// Return the next head event, or `None` when the feed is shutting down.
     fn next_head(&mut self) -> impl std::future::Future<Output = Option<HeadEvent>> + Send;
 
-    /// True if `new_head` does not extend `prev_head` (hash mismatch).
+    /// True if `new_head` does not extend `prev_head` (number gap).
+    /// Hash-equality is handled by [`classify_head`] as `Duplicate`; without
+    /// the parent hash we cannot distinguish a reorg from a normal new block
+    /// on hash alone, so only the number gap is a reliable signal here.
     fn reorged(prev_head: &HeadEvent, new_head: &HeadEvent) -> bool {
-        prev_head.number + 1 != new_head.number || prev_head.hash == new_head.hash
+        prev_head.number.saturating_add(1) != new_head.number
     }
 }
 
@@ -258,7 +261,8 @@ pub async fn poll_head_once(mode: FeedMode, ws_url: &str) -> Option<HeadEvent> {
     match mode {
         FeedMode::Canonical => {
             let mut feed = CanonicalFeed::with_ws_url(redact_url(ws_url), ws_url);
-            match tokio::time::timeout(Duration::from_secs(5), feed.next_head()).await {
+            // ponytail: outer 7s > inner 3s+3s subscribe / 2s recv so slow path completes before outer fires; 8-iter bound is anti-spin.
+            match tokio::time::timeout(Duration::from_secs(7), feed.next_head()).await {
                 Ok(head) => head,
                 Err(_) => {
                     tracing::warn!("canonical feed poll timed out; using fixture head");

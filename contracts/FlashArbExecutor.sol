@@ -117,6 +117,7 @@ contract FlashArbExecutor {
     error RouterCodeChanged(address router, bytes32 pinned, bytes32 current);
     error EnforcedPause();
     error ExpectedPause();
+    error ShortCalldata();
     error Reentrant();
 
     // ------------------------------------------------------------------ types
@@ -169,6 +170,7 @@ contract FlashArbExecutor {
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferStarted(address indexed currentOwner, address indexed pendingOwner);
+    event OwnershipTransferCancelled(address indexed currentOwner);
     event OperatorUpdated(address indexed operator);
     event PauserUpdated(address indexed pauser);
     event RouterAllowlistUpdated(address indexed router, bool allowed);
@@ -566,14 +568,18 @@ contract FlashArbExecutor {
 
     /// @notice First 4 bytes of calldata as a selector.
     function _selector(bytes memory data) internal pure returns (bytes4 sel) {
-        require(data.length >= 4, "short calldata");
+        if (data.length < 4) revert ShortCalldata();
         assembly {
             sel := mload(add(data, 32))
         }
     }
 
     /// @notice Calldata body (everything after the 4-byte selector).
+    /// @dev Byte loop is gas-inefficient but correct; assembly slice is the
+    ///      upgrade path if profiling shows it matters.
     function _sliceCalldataBody(bytes memory data) internal pure returns (bytes memory body) {
+        // ponytail: O(n) copy; assembly slice cheaper. Upgrade when gas
+        // profiling flags router-calldata prep as hot.
         body = new bytes(data.length - 4);
         for (uint256 i = 0; i < body.length; ++i) {
             body[i] = data[i + 4];
@@ -706,15 +712,15 @@ contract FlashArbExecutor {
     }
 
     /// @notice Set the operator (may call `execute` only). Owner retains all.
+    /// @dev `address(0)` revokes: a compromised hot key is nulled, not rotated.
     function setOperator(address operator_) external onlyOwner {
-        if (operator_ == address(0)) revert ZeroAddress();
         operator = operator_;
         emit OperatorUpdated(operator_);
     }
 
     /// @notice Set the pauser (may call `pause` only). Owner retains all.
+    /// @dev `address(0)` revokes: a compromised monitor key is nulled.
     function setPauser(address pauser_) external onlyOwner {
-        if (pauser_ == address(0)) revert ZeroAddress();
         pauser = pauser_;
         emit PauserUpdated(pauser_);
     }
@@ -770,5 +776,11 @@ contract FlashArbExecutor {
         owner = next;
         pendingOwner = address(0);
         emit OwnershipTransferred(prev, next);
+    }
+
+    /// @notice Cancel a pending ownership transfer (fat-finger recovery).
+    function cancelOwnership() external onlyOwner {
+        pendingOwner = address(0);
+        emit OwnershipTransferCancelled(msg.sender);
     }
 }

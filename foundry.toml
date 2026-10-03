@@ -2,7 +2,8 @@
 #
 # Coexists with the Rust paper-trading crate in this repo:
 #   - Solidity sources live in `contracts/` (NOT `src/`, which belongs to Cargo).
-#   - Tests live in `test/`. No `script/` dir: deploys/broadcasts are out of scope.
+#   - Tests live in `test/`. `script/` is bash-only (no `*.s.sol` Forge scripts):
+#     deploys/broadcasts are out of scope for Forge.
 #   - `cargo test` / `cargo build` are unaffected by these settings.
 #
 # Safety: no deploy, no broadcast, no mainnet. Tests run offline with mocks,

@@ -225,9 +225,11 @@ pub fn optimal_size(
     }
     // 10-point grid: 10%..100% of max_flash. Integer division floors;
     // skip zero candidates (dust).
+    // ponytail: 10-point linear grid pre-filter; live path re-simulates chosen size via quoter eth_call.
     let mut best: Option<(U256, U256)> = None;
+    let ten = U256::from(10u64);
     for i in 1u64..=10u64 {
-        let size = max_flash.saturating_mul(U256::from(i)) / U256::from(10u64);
+        let size = max_flash.saturating_mul(U256::from(i)) / ten;
         if size.is_zero() {
             continue;
         }
@@ -251,8 +253,9 @@ mod tests {
     use alloy::primitives::Address;
 
     fn pool_with_price(numer: u128, denom: u128, fee_ppm: u32) -> ClPoolState {
-        // sqrtPriceX96 = sqrt(numer/denom) * 2^96, computed in f64 ONLY for
-        // the fixture (never in the profit path).
+        // ponytail: f64 ONLY in this test fixture; profit path stays
+        // integer-only (U256). Never copy this into estimator/cost code;
+        // upgrade path is integer sqrt if fixtures need more precision.
         let p = numer as f64 / denom as f64;
         let sqrt = (p.sqrt() * 2f64.powi(96)) as u128;
         ClPoolState::new(

@@ -24,7 +24,7 @@ use chain::BlockFeed as _;
 use config::{BotConfig, FeedMode, addresses};
 use metrics::Metrics;
 use pools::{ClPoolState, PoolKind, resolve_fee};
-use profit::{CostModel, breakeven_size, evaluate_both_directions, optimal_size};
+use profit::{CostModel, evaluate_both_directions, optimal_size};
 use risk::{RiskError, RiskLimits, RiskState};
 
 #[derive(Debug, Parser)]
@@ -237,18 +237,15 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
         let leg_b = skewed_clone(&leg_b);
         tracing::debug!("leg_a={leg_a:?} leg_b={leg_b:?}");
 
-        match breakeven_size(&leg_a, &leg_b, max_flash, true, &costs, min_net) {
-            Some(s) => tracing::info!(pair = %pair.name, breakeven = %s, "break-even size"),
-            None => tracing::info!(pair = %pair.name, "no break-even size at any grid point"),
-        }
-
         let Some((size, net)) = optimal_size(&leg_a, &leg_b, max_flash, true, &costs, min_net)
         else {
             tracing::info!(pair = %pair.name, "no clearing size (below min net)");
+            tracing::info!(pair = %pair.name, "no break-even size at any grid point");
             metrics.record_risk_reject();
             metrics.record_pair_seen(&pair.name, "-");
             continue;
         };
+        tracing::info!(pair = %pair.name, breakeven = %size, "break-even size (best clearing)");
         // Full two-direction decision for the chosen size (exercises the
         // ProfitError path and the profitability predicate). The best
         // direction also labels the Discord alert below.
@@ -272,6 +269,9 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
                     continue;
                 }
             };
+        // Metrics/display conversion only; profit path stays U256.
+        // Saturate to MAX on overflow (would trip risk Oversize/BelowMin
+        // rather than hide); risk gate is the fail-closed check.
         let size_u64: u64 = size.try_into().unwrap_or(u64::MAX);
         let net_u64: u64 = net.try_into().unwrap_or(u64::MAX);
 

@@ -719,11 +719,54 @@ contract FlashArbExecutorTest is TestBase {
         executor.setPauser(PAUSER);
         assertEq(executor.pauser(), PAUSER, "pauser mismatch");
 
-        vm.expectRevert(abi.encodeWithSelector(FlashArbExecutor.ZeroAddress.selector));
+        // address(0) revokes — no revert, just clears.
         executor.setOperator(address(0));
-
-        vm.expectRevert(abi.encodeWithSelector(FlashArbExecutor.ZeroAddress.selector));
+        assertEq(executor.operator(), address(0), "operator not revoked");
         executor.setPauser(address(0));
+        assertEq(executor.pauser(), address(0), "pauser not revoked");
+    }
+
+    function test_OperatorPauser_RevokeBlocksExecuteAndPause() external {
+        executor.setOperator(OPERATOR);
+        executor.setPauser(PAUSER);
+        executor.setOperator(address(0));
+        executor.setPauser(address(0));
+        assertEq(executor.operator(), address(0), "operator revoke failed");
+        assertEq(executor.pauser(), address(0), "pauser revoke failed");
+        vm.prank(OPERATOR);
+        vm.expectRevert(abi.encodeWithSelector(FlashArbExecutor.NotOperatorOrOwner.selector));
+        executor.execute(_goodAtoB());
+        vm.prank(PAUSER);
+        vm.expectRevert(abi.encodeWithSelector(FlashArbExecutor.NotPauserOrOwner.selector));
+        executor.pause();
+        // Owner still can execute/pause.
+        executor.execute(_goodAtoB());
+        assertEq(usdc.balanceOf(address(executor)), PROFIT, "owner execute after revoke failed");
+        executor.pause();
+        assertTrue(executor.paused(), "owner pause after revoke failed");
+        executor.unpause();
+    }
+
+    function test_CancelOwnership_ClearsPending() external {
+        address next = address(0x1234);
+        executor.transferOwnership(next);
+        assertEq(executor.pendingOwner(), next, "pending not set");
+        executor.cancelOwnership();
+        assertEq(executor.pendingOwner(), address(0), "pending not cancelled");
+        vm.prank(next);
+        vm.expectRevert(abi.encodeWithSelector(FlashArbExecutor.NotPendingOwner.selector));
+        executor.acceptOwnership();
+        // Non-owner cannot cancel.
+        executor.transferOwnership(next);
+        vm.prank(ATTACKER);
+        vm.expectRevert(abi.encodeWithSelector(FlashArbExecutor.NotOwner.selector));
+        executor.cancelOwnership();
+        assertEq(executor.pendingOwner(), next, "pending changed by attacker cancel");
+        // Idempotent cancel when no pending.
+        executor.cancelOwnership();
+        assertEq(executor.pendingOwner(), address(0), "idempotent cancel failed");
+        executor.cancelOwnership();
+        assertEq(executor.pendingOwner(), address(0), "second cancel failed");
     }
 
     function test_Operator_CanExecute_CannotAdmin() external {
