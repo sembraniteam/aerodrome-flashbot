@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook: blocks commits that stage likely secrets or credentials.
+#
+# Checks (staged changes only, values are never printed):
+#   1. File names that look like credentials (.env, *.pem, id_rsa, ...)
+#   2. Added lines that look like secrets (password=..., AKIA..., private keys)
+#
+# Setup (once per clone):
+#   chmod +x .githooks/pre-commit
+#   git config core.hooksPath .githooks
+#
+# Can also be run manually to preview findings:
+#   bash .githooks/pre-commit
+#
+# False positives:
+#   - Add `secret-scan:ignore` in a comment on the offending line
+#   - Template files (*.example, *.sample, *.template, *.dist) are allowed
+#   - Last resort: SKIP_SECRET_CHECK=1 git commit ...
+
+set -u
+
+if [ "${SKIP_SECRET_CHECK:-0}" = "1" ]; then
+  echo "pre-commit: secret check skipped (SKIP_SECRET_CHECK=1)" >&2
+  exit 0
+fi
+
+FILE_RE='(^|/)\.env$|\.env\.|credentials|secrets|\.pem$|\.key$|\.p12$|\.pfx$|id_rsa|id_dsa|id_ecdsa|\.password|api_key|token'
+FILE_ALLOW_RE='\.(example|sample|template|dist)$'
+KEYWORD_RE='(password|secret|api_key|access_token|private_key|client_secret)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9+/]{8,}'
+FORMAT_RE='AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{36,}|xox[baprs]-[A-Za-z0-9-]{10,}'
+
+findings=0
+out=""
+
+# Added/Copied/Modified/Renamed only: deleting a secret file must not be blocked
+files=$(git -c core.quotepath=off diff --cached --name-only --diff-filter=ACMR)
+
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+
+  # 1. Suspicious file name
+  if printf '%s\n' "$f" | grep -Eiq "$FILE_RE" \
+     && ! printf '%s\n' "$f" | grep -Eiq "$FILE_ALLOW_RE"; then
+    out+="  [filename] $f"$'\n'
+    findings=1
+  fi
+
+  # 2. Secret-like content in added lines, emitted as "<line number>:<content>"
+  added=$(git -c core.quotepath=off diff --cached -U0 --no-color -- "$f" | awk '
+    /^@@/ { match($0, /\+[0-9]+/); n = substr($0, RSTART + 1, RLENGTH - 1) - 1; hunk = 1; next }
+    !hunk { next }
+    /^\+/ { n++; print n ":" substr($0, 2) }
+  ' | grep -v 'secret-scan:ignore')
+
+  [ -z "$added" ] && continue
+
+  hits=$(
+    {
+      printf '%s\n' "$added" | grep -Ei "$KEYWORD_RE"
+      printf '%s\n' "$added" | grep -E "$FORMAT_RE"
+    } | cut -d: -f1 | sort -un | head -10 | paste -sd, -
+  )
+
+  if [ -n "$hits" ]; then
+    out+="  [content]  $f (line $hits) [REDACTED]"$'\n'
+    findings=1
+  fi
+done <<< "$files"
+
+if [ "$findings" -eq 1 ]; then
+  {
+    echo "pre-commit: potential secrets or credentials in staged changes"
+    printf '%s' "$out"
+    echo
+    echo "Unstage or fix the files above (git restore --staged <file>), or mark"
+    echo "a false positive with a 'secret-scan:ignore' comment on that line."
+  } >&2
+  exit 1
+fi
+
+exit 0
