@@ -110,11 +110,29 @@ Understand the existing schema, models, and query style first. Make the smallest
 ### 7. Compile-Time and Type Errors
 Diesel type errors are long. Read them from the bottom and find the first mismatch: wrong column type, missing `Nullable`, struct field order for `Queryable`, missing `joinable!`/`allow_tables_to_appear_in_same_query!`, or a missing feature flag. Use `Selectable` + `as_select()` and `check_for_backend` to localize errors. Large schemas increase compile time: only enable the column-count features you need and consider `diesel.toml` `filter`.
 
-### 8. Tests
-- Test against a **real database of the production engine** (use the project's setup: test database, `embed_migrations!`, or CI service); SQLite is not a substitute for PostgreSQL/MySQL behavior
-- Isolate tests with `conn.test_transaction(|conn| { ... })` (rolls back) or per-test databases, as the project does
-- Cover constraints (unique/foreign-key violations), upserts, transaction rollback, `NotFound` paths, and the migration `up`/`down` cycle
-- For bug fixes, write the failing test first when practical
+### 8. Tests: Few, Meaningful, Maintainable
+**Goal**: tests that fail when behavior breaks and stay quiet when only the implementation changes. Quality over count or coverage percentage.
+
+**Strategy by layer**
+- **Repositories/adapters**: test against a **real database of the production engine** (the project's setup: test database, `embed_migrations!`, or CI service); SQLite is not a substitute for PostgreSQL/MySQL behavior. Isolate with `conn.test_transaction(|conn| { ... })` (rolls back) or per-test databases, as the project does
+- **Services/business logic**: unit tests with `mockall` mocks of the repository traits; no database needed
+- Never mock the Diesel connection or query builder
+
+**Worth testing**
+- Queries that contain logic: filters, joins, ordering, pagination, upsert/`on_conflict` behavior
+- Constraints (unique, foreign key, check) and their mapping to domain errors; transaction rollback atomicity; `NotFound` to `Option` handling
+- The migration `up`/`down` cycle
+- Every bug fix: a test that failed before the fix
+
+**Do not write**
+- Tests that Diesel derives or generated `schema.rs` work, trivial CRUD that merely forwards with no logic or constraint, getters/plain structs, third-party behavior, near-duplicates, or anything only for coverage
+
+**How**
+- Arrange-Act-Assert, one behavior per test, named by behavior, no loops or conditionals in bodies except table-driven cases
+- **Fixtures**: factory/builder functions that insert the minimal valid rows with sensible defaults (for example `NewUserBuilder::default().email(..)`) in one shared test-support module; reuse them, never copy setup between tests
+- Deterministic: inject time and randomness through traits; no real network or wall clock
+- Before finishing, ask of each test: "which bug would make this fail?" Remove tests with no good answer, and confirm new tests fail when you break the behavior
+- Add dev-dependencies (`mockall`, `rstest`) only when used; follow the project's existing test stack first
 
 ### 9. Migration Safety (live systems)
 - Add a column as nullable (or with a safe default), backfill in batches, then add `NOT NULL`
@@ -124,6 +142,48 @@ Diesel type errors are long. Read them from the bottom and find the first mismat
 
 ### 10. Search When Uncertain
 If you are unsure about a Diesel API, derive attribute, feature flag, or database behavior, check primary sources before coding: the Diesel guides and API docs for the pinned version (`diesel.rs`, `docs.diesel.rs`, `docs.rs/diesel`), `docs.rs/diesel-async`, `docs.rs/diesel_migrations`, and the database's official docs. Cite what you consulted and use the version in `Cargo.lock`, not just the latest.
+
+## Code Quality Standards
+
+Write code that is easy to read, change, and test. Apply these in proportion to the task; they are tools, not rituals.
+
+### Design Principles
+- **KISS**: choose the simplest design that meets today's requirement; clear beats clever
+- **YAGNI**: build only what the current task needs. No speculative traits, generic parameters, config options, feature flags, or extension points without a present use
+- **DRY**: one authoritative place for each piece of knowledge (rule, constant, conversion, query). Remove real duplication, but wait for the third occurrence before abstracting similar-looking code; the wrong abstraction costs more than duplication
+- **SOLID, as it applies in Rust**
+    - SRP: each module, struct, and function has one reason to change; split by responsibility, not by line count
+    - OCP: extend through new trait implementations or enum variants with exhaustive `match`, not by editing unrelated code
+    - LSP: every trait implementation honors the trait's documented contract (errors, ordering, idempotency, cancellation)
+    - ISP: small, focused traits; no forced methods
+    - DIP: logic depends on traits for I/O (network, database, clock, filesystem, randomness), never on concrete clients; concrete types are wired once at the composition root (`main`)
+- **Separation of concerns**: pure logic (decisions, calculations, validation) apart from I/O so it is testable without mocks
+- **Explicit dependencies, low coupling**: pass dependencies via constructors/parameters; no hidden globals, singletons, or `static mut`; immutable by default; small public surfaces
+
+### Structure and Smells to Avoid
+- **God files, modules, types, services**: if something mixes responsibilities or needs "and" to describe it, split it. Soft signals: a function longer than a screen, deep nesting, more than ~4-5 parameters, a type with many unrelated fields or methods, a module everything imports
+- **Duplication, magic numbers/strings** (name them), **primitive obsession** (use newtypes for IDs, amounts, units), boolean-flag parameters (use enums), stringly-typed data, feature envy, shotgun surgery
+- **Dead code**: unused functions, parameters, types, imports, dependencies, feature flags, config keys, commented-out code, unreachable branches, stale TODOs. Delete it. Treat `dead_code`/`unused_*` warnings and unused dependencies as defects
+- **Gaps**: `todo!()`/`unimplemented!()`, catch-all `_ =>` arms that hide new variants, unhandled error cases, missing validation at boundaries, swallowed errors, half-migrated patterns, behavior without tests, docs that disagree with code. Close them within the task or report them explicitly; never leave a hidden one
+
+### Consistency (same pattern everywhere)
+- Before writing anything new, find how the codebase already solves the same kind of problem (error types, module layout, naming, config loading, dependency wiring, async style, test helpers) and **reuse that pattern**
+- Do not introduce a second way to do the same thing. If the existing pattern is flawed, say so and propose changing it everywhere (as a separate task) instead of mixing styles
+- Same names for the same concepts; one error-handling style; one way to inject dependencies; one test structure
+
+### Robust Code
+- Validate at the boundaries (input, config, external responses), then trust the types; make illegal states unrepresentable
+- Follow "Transactions and Errors" above: handle every realistic failure explicitly, with typed errors and context; no swallowed errors; no `let _ =` on results that matter; no `unwrap`/`expect` on database results in production paths
+- Match exhaustively; avoid catch-all arms on enums you own
+- Bound everything: timeouts on all I/O, bounded channels and queues, size limits, retries with backoff only for idempotent operations
+- Clean shutdown and resource release; cancellation-safe async; no leaked tasks
+- Robust is not speculative: defend against realistic failures, not imagined features
+
+### Data-Layer Structure
+- Layers: handlers/services (business logic) -> repository traits (ports) -> Diesel implementations (adapters). Diesel types (`schema::*`, connections, `diesel::result::Error`) do not leak above the repository; map them to domain errors there
+- One module per aggregate or table group (model structs, repository trait, Diesel implementation). No god `db.rs`, `models.rs`, `queries.rs`, or repository with unrelated methods (ISP)
+- Reuse query fragments through small composable functions; keep each filter/join rule in one place (DRY). Do not create a repository trait that has no consumer and no test seam (YAGNI), but services that contain logic depend on a trait so they can be tested with mocks
+- Connection and transaction handling lives in one place (a helper or unit of work), used the same way everywhere
 
 ## Verification Workflow
 
