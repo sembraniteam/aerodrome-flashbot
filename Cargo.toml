@@ -1,0 +1,18 @@
+[package]
+name = "aerodrome-flashbots"
+description = "Aerodrome flasbots"
+version = "0.1.0"
+rust-version = "1.99.0"
+edition = "2024"
+readme = "README.md"
+publish = false
+authors = ["Ahmad Rifa'i <develop.rifai@gmail.com>"]
+
+[profile.release]
+opt-level = 3
+lto = false
+debug = false
+strip = "none"
+incremental = false
+
+[dependencies]

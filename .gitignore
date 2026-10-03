@@ -1,0 +1,8 @@
+# IntelliJ IDEA
+.idea
+
+# Rust
+/target
+
+# macOS
+.DS_Store
