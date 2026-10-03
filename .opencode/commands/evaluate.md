@@ -1,5 +1,5 @@
 ---
-description: Evaluate current implementation (base-flash-arb)
+description: Evaluate current implementation
 agent: evaluator
 subtask: true
 ---
