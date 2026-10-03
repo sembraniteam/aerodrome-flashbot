@@ -1,6 +1,5 @@
 ---
 description: Commit staged changes with a Conventional Commits message
-model: nvidia/nemotron-3.5-lightning-free
 ---
 
 Commit staged changes using Conventional Commits 1.0.0. Every commit message must follow the format and length rules in
