@@ -1,0 +1,20 @@
+# Foundry project for the minimal atomic flash-arbitrage executor (PRIORITY 5).
+#
+# Coexists with the Rust paper-trading crate in this repo:
+#   - Solidity sources live in `contracts/` (NOT `src/`, which belongs to Cargo).
+#   - Tests live in `test/`. No `script/` dir: deploys/broadcasts are out of scope.
+#   - `cargo test` / `cargo build` are unaffected by these settings.
+#
+# Safety: no deploy, no broadcast, no mainnet. Tests run offline with mocks,
+# or read-only against a local fork (see test/FlashArbExecutorFork.t.sol).
+
+[profile.default]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+test = "test"
+cache_path = "cache"
+solc_version = "0.8.37"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200

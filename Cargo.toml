@@ -1,6 +1,6 @@
 [package]
-name = "aerodrome-flashbots"
-description = "Aerodrome flasbots"
+name = "base-flash-arb"
+description = "Flash-loan cross-DEX arbitrage on Base: Aerodrome Slipstream vs Uniswap V3, with Discord control plane"
 version = "0.1.0"
 rust-version = "1.99.0"
 edition = "2024"
@@ -8,6 +8,10 @@ repository = "https://github.com/sembraniteam/aerodrome-flashbot"
 readme = "README.md"
 publish = false
 authors = ["Ahmad Rifa'i <develop.rifai@gmail.com>"]
+
+[lib]
+name = "base_flash_arb"
+path = "src/lib.rs"
 
 [profile.release]
 opt-level = 3
@@ -17,3 +21,15 @@ strip = "none"
 incremental = false
 
 [dependencies]
+alloy = { version = "2.5.0", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1.1.6"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+csv = "1"
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -3,6 +3,16 @@
 
 # Rust
 /target
+results.csv
+
+# Local secrets / endpoints: never commit real RPC URLs or keys.
+config/local.toml
+.env
 
 # macOS
 .DS_Store
+
+# Foundry (Solidity executor coexists with the Rust crate; see foundry.toml)
+/out
+/cache
+/broadcast

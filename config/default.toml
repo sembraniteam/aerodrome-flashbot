@@ -1,0 +1,68 @@
+# Testnet-safe defaults. NEVER commit real RPC URLs with API keys here.
+# Copy to config/local.toml (gitignored) for local runs and put secrets in
+# the environment instead.
+dry_run = true
+chain_id = 8453
+rpc_ws_url = "ws://127.0.0.1:8545"
+# Post-Denim default: canonical 200ms blocks via live newHeads. The Denim
+# upgrade replaces Flashblocks 200ms sub-blocks (pending-tag
+# preconfirmations) with canonical 200ms blocks (targeted ~Oct 2026, not
+# final -- re-verify against docs.base.org). Use "flashblocks" explicitly
+# only while pre-Denim behavior is confirmed live.
+feed_mode = "canonical"
+# Tolerated head age in blocks for the risk staleness gate (1..=1024).
+head_staleness_blocks = 5
+
+# USDC base units (6 decimals): 500_000_000 = $500
+max_flash_usdc = 500_000_000
+# 5_000_000 = $5
+min_net_profit_usdc = 5_000_000
+max_slippage_bps = 50
+# 100_000_000 = $100
+daily_loss_cap_usdc = 100_000_000
+max_consecutive_failures = 3
+
+# Optional private-relay RPC for submissions (e.g. a Flashbots-Protect-style
+# private mempool endpoint). Leave unset for read-only paper mode. NEVER put a
+# URL containing a key here -- configure it via environment/secret manager on
+# the host instead. Logged redacted only.
+# private_rpc_url = "https://protect.example/rpc"
+
+# Submission deadline horizon (seconds from quote time). The executor reverts
+# past `deadline`; keep tight to bound stale-quote / front-run exposure.
+deadline_secs = 30
+# Max in-flight transactions. Pinned to 1 -- the config accepts no other value.
+max_in_flight = 1
+
+[[pairs]]
+name = "WETH/USDC"
+token_a = "0x4200000000000000000000000000000000000006"
+token_b = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+decimals_a = 18
+decimals_b = 6
+enabled = true
+
+[[pairs]]
+name = "AERO/USDC"
+token_a = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+token_b = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+decimals_a = 18
+decimals_b = 6
+enabled = true
+
+[[pairs]]
+name = "AERO/WETH"
+token_a = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+token_b = "0x4200000000000000000000000000000000000006"
+decimals_a = 18
+decimals_b = 18
+enabled = true
+
+# Placeholder: stays disabled until the verified cbETH address is added.
+[[pairs]]
+name = "cbETH/ETH-DISABLED"
+token_a = "0x0000000000000000000000000000000000000000"
+token_b = "0x4200000000000000000000000000000000000006"
+decimals_a = 18
+decimals_b = 18
+enabled = false
