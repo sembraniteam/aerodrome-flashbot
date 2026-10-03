@@ -4,6 +4,7 @@ description = "Aerodrome flasbots"
 version = "0.1.0"
 rust-version = "1.99.0"
 edition = "2024"
+repository = "https://github.com/sembraniteam/aerodrome-flashbot"
 readme = "README.md"
 publish = false
 authors = ["Ahmad Rifa'i <develop.rifai@gmail.com>"]
