@@ -66,7 +66,7 @@ Never commit or log: keys, RPC URLs with tokens, webhook URLs, `.env`, `config/l
   resume/unpause/sweep/allowlist/limit via Discord, `src/bin/discord-bot.rs` reads only `PAUSER_KEY`).
 - Executor selectors: `0xa026383e` Slipstream / `0x04e45aaf` UniV3 production; mock `0xd5bcb9b5` never enabled on
   production; UniversalRouter explicit-selector-only (never production path per `ADR-001`).
-- Risk: `size <= max <= hard_max`, `max_flash_usdc=$500` `min_net_profit_usdc=$5` `max_slippage_bps=50`
+- Risk: `size <= max <= hard_max`, `max_flash_usdc=$5000` `min_net_profit_usdc=$5` `max_slippage_bps=50`
   `daily_loss_cap_usdc=$100` `max_consecutive_failures=3` `head_staleness_blocks=5` `deadline_secs=30` (1..300)
   `max_in_flight=1` pinned; circuit breaker + kill switch + sequencer gate (Chainlink `0xBCF8…6433`, 3600s grace) all
   fail-closed. Allowlist `WETH/USDC`, `AERO/USDC`, `AERO/WETH`; `cbETH/ETH` placeholder stays disabled.

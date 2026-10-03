@@ -13,8 +13,8 @@ feed_mode = "canonical"
 # Tolerated head age in blocks for the risk staleness gate (1..=1024).
 head_staleness_blocks = 5
 
-# USDC base units (6 decimals): 500_000_000 = $500
-max_flash_usdc = 500_000_000
+# USDC base units (6 decimals): 5000000000 = $5000
+max_flash_usdc = 5000000000
 # 5_000_000 = $5
 min_net_profit_usdc = 5_000_000
 max_slippage_bps = 50

@@ -65,7 +65,7 @@ FORK_URL=https://mainnet.base.org cargo run -- --fork-matrix
 | Key                        | Default              | Notes                            |
 |----------------------------|----------------------|----------------------------------|
 | `dry_run`                  | `true`               | forced `true` by paper binary    |
-| `max_flash_usdc`           | `500_000_000` ($500) | `hard_max` in `src/risk.rs`      |
+| `max_flash_usdc`           | `5000000000` ($5000) | `hard_max` in `src/risk.rs`      |
 | `min_net_profit_usdc`      | `5_000_000` ($5)     | `optimal_size` filter            |
 | `max_slippage_bps`         | `50`                 |                                  |
 | `daily_loss_cap_usdc`      | `100_000_000`        |                                  |

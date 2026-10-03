@@ -246,7 +246,7 @@ contract FlashArbExecutor {
     bool public paused;
 
     /// @notice Per-trade USDC flash cap. Default mirrors
-    /// `config/default.toml` max_flash_usdc ($500 = 500_000_000 base units).
+    /// `config/default.toml` max_flash_usdc ($5000 = 5_000_000_000 base units).
     uint256 public maxFlashUSDC;
 
     /// @notice Global fee-on-transfer kill switch. Default closed (false):
@@ -318,9 +318,9 @@ contract FlashArbExecutor {
         VAULT = vault_;
         USDC = usdc_;
         owner = msg.sender;
-        maxFlashUSDC = 500_000_000;
+        maxFlashUSDC = 5_000_000_000;
         emit OwnershipTransferred(address(0), msg.sender);
-        emit MaxFlashUSDCUpdated(500_000_000);
+        emit MaxFlashUSDCUpdated(5_000_000_000);
     }
 
     // ---------------------------------------------------------------- execute

@@ -365,8 +365,10 @@ contract FlashArbExecutorTest is TestBase {
 
     function test_RevertWhen_ExceedsMaxFlash() external {
         FlashArbExecutor.ExecParams memory p = _goodAtoB();
-        p.flashAmount = 501_000_000; // default cap is 500 USDC
-        vm.expectRevert(abi.encodeWithSelector(FlashArbExecutor.ExceedsMaxFlash.selector, uint256(501_000_000), FLASH));
+        p.flashAmount = 5_001_000_000; // default cap is 5000 USDC
+        vm.expectRevert(
+            abi.encodeWithSelector(FlashArbExecutor.ExceedsMaxFlash.selector, uint256(5_001_000_000), 5_000_000_000)
+        );
         executor.execute(p);
     }
 

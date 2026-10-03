@@ -129,7 +129,7 @@ pub struct BotConfig {
     /// post-Denim). Selected by config, never scattered as literals.
     pub feed_mode: FeedMode,
     /// Max flash-loan principal per trade, in USDC base units (6 decimals).
-    /// Default $500 -> 500_000_000.
+    /// Default $5000 -> 5_000_000_000.
     pub max_flash_usdc: u64,
     /// Minimum acceptable net profit per trade, in USDC base units.
     /// Default $5 -> 5_000_000.
@@ -181,7 +181,7 @@ pub enum FeedMode {
     Flashblocks,
 }
 
-/// Testnet-safe defaults: dry-run on, $500 max flash, $5 min profit.
+/// Testnet-safe defaults: dry-run on, $5000 max flash, $5 min profit.
 impl Default for BotConfig {
     fn default() -> Self {
         Self {
@@ -189,7 +189,7 @@ impl Default for BotConfig {
             chain_id: addresses::BASE_CHAIN_ID,
             rpc_ws_url: "ws://127.0.0.1:8545".to_string(),
             feed_mode: FeedMode::Canonical,
-            max_flash_usdc: 500_000_000,      // $500
+            max_flash_usdc: 5_000_000_000,    // $5000
             min_net_profit_usdc: 5_000_000,   // $5
             max_slippage_bps: 50,             // 0.50%
             daily_loss_cap_usdc: 100_000_000, // $100
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(cfg.chain_id, 8453);
         assert_eq!(cfg.feed_mode, FeedMode::Canonical);
         assert_eq!(cfg.head_staleness_blocks, 5);
-        assert_eq!(cfg.max_flash_usdc, 500_000_000);
+        assert_eq!(cfg.max_flash_usdc, 5_000_000_000);
         assert_eq!(cfg.min_net_profit_usdc, 5_000_000);
         assert_eq!(cfg.deadline_secs, 30);
         assert_eq!(cfg.max_in_flight, 1);

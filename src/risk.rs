@@ -7,11 +7,11 @@
 use thiserror::Error;
 
 /// Hard ceiling for the flash principal per trade (profit-token base units,
-/// $500 in USDC units). The control plane can never raise limits above this;
+/// $5000 in USDC units). The control plane can never raise limits above this;
 /// [`crate::config::BotConfig::validate`] enforces it on config load and
 /// [`RiskState::check_trade`] enforces `size <= max_flash <= hard_max_flash`
 /// on every candidate.
-pub const HARD_MAX_FLASH_USDC: u64 = 500_000_000;
+pub const HARD_MAX_FLASH_USDC: u64 = 5_000_000_000;
 
 #[derive(Debug, Clone)]
 pub struct RiskLimits {
@@ -36,7 +36,7 @@ pub struct RiskLimits {
 impl Default for RiskLimits {
     fn default() -> Self {
         Self {
-            max_flash: 500_000_000,         // $500
+            max_flash: 5_000_000_000,       // $5000
             max_loss_per_trade: 10_000_000, // $10
             daily_loss_cap: 100_000_000,    // $100
             max_in_flight: 1,
@@ -258,7 +258,7 @@ mod tests {
             s.check_trade(
                 "WETH/USDC",
                 true,
-                999_999_999,
+                5_000_000_001,
                 Some(9_999_999),
                 0,
                 Some(100),
