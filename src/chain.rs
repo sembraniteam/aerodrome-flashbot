@@ -4,7 +4,7 @@
 //! the `pending` tag are announced to be replaced by canonical 200 ms blocks
 //! in the Denim upgrade, targeted ~Oct 2026 but not final). All `pending`-tag
 //! assumptions therefore live behind [`BlockFeed`] implementations selected by
-//! [`FeedMode`](crate::config::FeedMode), never as scattered literals.
+//! [`FeedMode`](FeedMode), never as scattered literals.
 //!
 //! After Denim, millisecond timestamps may arrive as extra header fields:
 //! prefer `WithOtherFields` / typed OP-Stack headers over plain
@@ -38,7 +38,7 @@ pub struct HeadEvent {
 /// duplicate/reordered events and surface reorgs via [`BlockFeed::reorged`].
 pub trait BlockFeed: Send {
     /// Return the next head event, or `None` when the feed is shutting down.
-    fn next_head(&mut self) -> impl std::future::Future<Output = Option<HeadEvent>> + Send;
+    fn next_head(&mut self) -> impl Future<Output = Option<HeadEvent>> + Send;
 
     /// True if `new_head` does not extend `prev_head` (number gap).
     /// Hash-equality is handled by [`classify_head`] as `Duplicate`; without
@@ -262,13 +262,12 @@ pub async fn poll_head_once(mode: FeedMode, ws_url: &str) -> Option<HeadEvent> {
         FeedMode::Canonical => {
             let mut feed = CanonicalFeed::with_ws_url(redact_url(ws_url), ws_url);
             // ponytail: outer 7s > inner 3s+3s subscribe / 2s recv so slow path completes before outer fires; 8-iter bound is anti-spin.
-            match tokio::time::timeout(Duration::from_secs(7), feed.next_head()).await {
-                Ok(head) => head,
-                Err(_) => {
+            tokio::time::timeout(Duration::from_secs(7), feed.next_head())
+                .await
+                .unwrap_or_else(|_| {
                     tracing::warn!("canonical feed poll timed out; using fixture head");
                     None
-                }
-            }
+                })
         }
         FeedMode::Flashblocks => {
             let mut feed = FlashblocksFeed::new(redact_url(ws_url));
