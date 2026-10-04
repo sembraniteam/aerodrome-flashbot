@@ -203,3 +203,7 @@ Only if these agents exist in this project:
 ## Remember
 
 Simple, tested, and verified. Match the codebase, favor audited building blocks, never touch live networks or keys, and report honestly, including what you did not verify.
+
+## Live-Path Work
+
+When asked to implement or change the live-capable path (testnet or mainnet), load the `go-live-readiness` skill and build to `references/live-contract.md` (invariants L1 to L10). Keep dry-run the default, keep live code behind the `live` feature and its own binary, and ship offline tests for every refusal and fail-closed path. You write and test code only: real keys, deployments, funding, and transactions are the user's to run from the runbooks.

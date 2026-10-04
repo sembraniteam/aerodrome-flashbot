@@ -7,21 +7,23 @@ Secret-related commands use `-l` (file names only) on purpose, so values never r
 
 ## 1. Safety Invariants (hard gate)
 
-### S1: Dry-run only (no keys, signing, broadcasting, mainnet writes)
+### S1: Execution isolation (no signing or broadcasting outside the `live` feature)
 
 ```bash
 grep -rnE "PrivateKeySigner|LocalSigner|EthereumWallet|send_transaction|send_raw_transaction|eth_sendRawTransaction|\.sign_" src/
 grep -rnEi "wallet|signer|broadcast" src/ | head -40
+grep -rn 'feature = "live"' src/
 ```
 
-Pass when there are no live execution paths. Adding one requires an explicit user-owned config flag and a separate,
-reviewed code path. Check that new `eth_call` usage stays read-only and that nothing in the
-diff submits a transaction.
+Pass when every hit is inside `#[cfg(feature = "live")]` code or the live binary, and `cargo build --bins` without the
+feature contains no signer or sender code. A signing or sending path outside the feature is Critical. Check that new
+`eth_call` usage stays read-only. Any live code must also satisfy section 1b.
 
 ### S2: Paper binary forces dry-run
 
-Read `src/main.rs`. The binary must force dry-run even if `config/default.toml` or a local config says
-`dry_run = false`. Verify the override still exists and that `config/default.toml` still has `dry_run = true`.
+Read `src/main.rs`. The paper binary must force dry-run even if `config/default.toml`, a profile, or a local config
+says `dry_run = false`. Verify the override still exists and that `config/default.toml` still has `dry_run = true`. The
+live binary is a different binary; it never replaces the paper binary's behavior.
 
 ### S3: Discord control plane is pause-only
 
@@ -102,7 +104,7 @@ Read `src/risk.rs`, `src/sequencer.rs`, and `config/default.toml`. Verify these 
 user approval:
 
 - Hard limits `size <= max <= hard_max`; circuit breaker; kill switch that fails closed
-- Defaults: `max_flash_usdc=$500`, `min_net_profit_usdc=$5`, `max_slippage_bps=50`, `daily_loss_cap_usdc=$100`,
+- Defaults: `max_flash_usdc=$5000`, `min_net_profit_usdc=$5`, `max_slippage_bps=50`, `daily_loss_cap_usdc=$100`,
   `max_consecutive_failures=3`, `head_staleness_blocks=5`
 - `max_in_flight` pinned to 1; `deadline_secs` default 30 within range 1 to 300
 - Sequencer uptime gate fails closed on error and honors the 3600 s grace period
@@ -112,6 +114,37 @@ user approval:
 ### S10: Language
 
 Code, comments, and docs are English. Spot-check the diff.
+
+## 1b. Live-Path Invariants L1 to L10 (hard gate when live code exists)
+
+Source of truth: `.opencode/skills/go-live-readiness/references/live-contract.md`. Read the contract, then check:
+
+```bash
+grep -rn "LIVE_ARM" src/
+grep -rnE "eth_chainId|chain_id" src/ config/
+grep -rnE "OWNER_KEY|OPERATOR_KEY|PAUSER_KEY" src/
+grep -rnE "unwrap_or\(true\)|unwrap_or_default\(\)" src/
+ls config/*.toml
+```
+
+- **L1** Startup refuses unless build feature, config flag, `LIVE_ARM` equal to the manifest hash, and manifest
+  (commit, chain id, stage, hashes, expiry) all check out. Each missing element has a refusal test.
+- **L2** Sepolia and mainnet profiles pin chain ids and share no addresses (S8). `hard_max` per profile is compiled in.
+- **L3** The trading binary loads the operator key only, through a `Signer` trait; the mainnet profile rejects the
+  env-key signer; keys never reach logs; operator float is capped.
+- **L4** Roles on-chain match the matrix; operator cannot unpause, sweep, or change allowlists or limits; role
+  read-back at startup; off-chain `hard_max` is at or below the on-chain limit.
+- **L5** Every pre-submit step fails closed (sequencer, head and provider agreement, integer-math estimate, quoter
+  verification, risk gate, final `eth_call` plus `estimateGas`, caps, intent persisted before submit).
+- **L6** One nonce owner, no blind retry, receipts tracked to a terminal state, reconciliation after each transaction
+  and daily, non-terminal intents resolved on startup.
+- **L7** Breaker and kill switch persist across restarts, an unreadable flag means stopped, the control plane stays
+  pause-only (S3).
+- **L8** Ledger is append-only JSON Lines with `prev_hash` chaining and a working `ledger verify`; no secrets or URLs.
+- **L9** `--emit-evidence` output states sample sizes and keeps predicted and realized values apart.
+- **L10** Offline tests cover every refusal, rejection, breaker, tamper, and role-mismatch case above.
+
+A missing item is Critical (live path without the control) or High (control present but untested).
 
 ## 2. Rust Off-chain Correctness
 
@@ -181,7 +214,9 @@ Update these when the related code changes:
 
 - `docs/FREEZE.md`: pinned addresses, selectors, chain id, `forge build --sizes`, codehashes
 - `docs/ADR-001-immutable-monolith.md`: any architectural decision that changes
-- `docs/RUNBOOK_SEPOLIA.md`: drill steps affected by deploy-script or executor changes
+- `docs/RUNBOOK_SEPOLIA.md`: drill steps affected by deploy-script or executor changes (drill matrix D1 to D12)
+- `docs/RUNBOOK_MAINNET_CANARY.md` and `docs/READINESS.md`: stage caps, owner go decision, and stop conditions, when a
+  live path exists
 - `docs/DISCORD_SETUP.md`: Discord control-plane changes
 - `README.md`: layout table, defaults, flags, and measured tallies. Measured numbers must be re-measured, never carried
   over after the scope changes (the README already notes its 12/12 tally predates the `AERO/WETH` rows).

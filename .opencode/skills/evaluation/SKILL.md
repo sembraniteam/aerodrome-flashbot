@@ -6,7 +6,7 @@ compatibility: opencode
 
 # Evaluation
 
-An independent audit of the current implementation, tailored to `base-flash-arb`: a dry-run-only
+An independent audit of the current implementation, tailored to `base-flash-arb`: a dry-run-by-default
 flash-loan arbitrage harness on Base (Aerodrome Slipstream vs Uniswap V3, Balancer V2 Vault flash loans) with two
 toolchains (Rust/Cargo and Solidity/Foundry).
 
@@ -52,8 +52,10 @@ A test that needs network access to pass is itself a finding.
 
 Load `references/domain-checks.md` and check every safety invariant S1 to S10.
 
-- **S1** Dry-run only: no signing keys, signing, broadcasting, or mainnet writes
-- **S2** Paper binary forces dry-run regardless of config
+- **S1** Execution isolation: the paper binary and the default build contain no signing keys, signing, broadcasting, or
+  mainnet writes. Live code is allowed only behind the `live` cargo feature and its own binary, and only when the
+  live-path invariants L1 to L10 also pass (see below)
+- **S2** Paper binary forces dry-run regardless of config; `config/default.toml` keeps `dry_run = true`
 - **S3** Discord holds the pauser key only; `discord_exposed(Resume) == false`; no resume, unpause, sweep, allowlist, or
   limit changes via Discord
 - **S4** Executor selectors: UniversalRouter explicit-selector-only; mock `SWAP_SELECTOR` never enabled on production;
@@ -68,6 +70,14 @@ Load `references/domain-checks.md` and check every safety invariant S1 to S10.
 - **S10** Repo-wide language is English
 
 Any violation makes the verdict NOT ACCEPTABLE, whatever the score.
+
+**Live-path invariants (L1 to L10, hard gate when the diff touches live code or the `live` feature exists).** Check
+them against `.opencode/skills/go-live-readiness/references/live-contract.md`: L1 Live Lock (build, config, arm,
+manifest), L2 chain profiles, L3 signer isolation, L4 executor roles and caps, L5 fail-closed pre-submit pipeline, L6
+sender and reconciliation, L7 circuit breaker and kill switch, L8 append-only hash-chained ledger, L9 evidence
+emission, L10 offline tests. A live path that lacks any of them is a Critical finding. If no live code exists, mark
+L1 to L10 NOT APPLICABLE. This skill judges code quality and invariants; whether the bot is ready for a given network
+stage is decided by `/readiness` (the `go-live-readiness` skill), never by `/evaluate`.
 
 ### Step 4: Review correctness and quality
 
@@ -108,13 +118,13 @@ the report.
 Score the dimensions below, using the matching checklists in `references/domain-checks.md` and the verified findings
 from 4a.
 
-| Dimension            | Weight | What earns the points                                                                                      |
-|----------------------|--------|------------------------------------------------------------------------------------------------------------|
-| Correctness          | 35     | Integer-only money math, decimals, both swap directions, cost model, executor atomicity and access control |
-| Tests                | 25     | New behavior covered, including revert and failure paths, runnable offline with mocks                      |
-| Risk controls        | 20     | Fail closed on every error path, limits enforced, no new unguarded execution path                          |
-| Docs and pinned data | 15     | README, `docs/FREEZE.md`, ADR, and runbook updated when addresses, selectors, or behavior change           |
-| Code quality         | 5      | Idiomatic, consistent with neighboring code, no dead code or stale comments                                |
+| Dimension            | Weight | What earns the points                                                                                       |
+|----------------------|--------|-------------------------------------------------------------------------------------------------------------|
+| Correctness          | 35     | Integer-only money math, decimals, both swap directions, cost model, executor atomicity and access control  |
+| Tests                | 25     | New behavior covered, including revert and failure paths, runnable offline with mocks                       |
+| Risk controls        | 20     | Fail closed on every error path, limits enforced, no unguarded execution path (live path only via the lock) |
+| Docs and pinned data | 15     | README, `docs/FREEZE.md`, ADR, and runbook updated when addresses, selectors, or behavior change            |
+| Code quality         | 5      | Idiomatic, consistent with neighboring code, no dead code or stale comments                                 |
 
 Award points only for what has evidence. Unverified work does not earn points.
 
@@ -144,6 +154,7 @@ N/25, Risk controls N/20, Docs N/15, Quality N/5)
 | Gate                              | Result                | Notes                       |
 |-----------------------------------|-----------------------|-----------------------------|
 | Safety invariants S1-S10          | PASS / FAIL           | [violations with path:line] |
+| Live-path invariants L1-L10       | PASS / FAIL / N/A     | [violations with path:line] |
 | cargo fmt / clippy / test / build | PASS / FAIL / NOT RUN | [first error lines]         |
 | forge fmt / build / test          | PASS / FAIL / NOT RUN | [first error lines]         |
 

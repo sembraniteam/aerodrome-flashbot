@@ -224,3 +224,7 @@ Only if these agents exist in this project:
 ## Remember
 
 Simulate first, trade small, fail closed, keep keys out of everything. Keep the code simple, consistent, and tested at its seams, and report honestly, including what you could not verify.
+
+## Live-Path Work
+
+When asked to implement or change the live-capable path (testnet or mainnet), load the `go-live-readiness` skill and build to `references/live-contract.md` (invariants L1 to L10). Keep dry-run the default, keep live code behind the `live` feature and its own binary, and ship offline tests for every refusal and fail-closed path. You write and test code only: real keys, deployments, funding, and transactions are the user's to run from the runbooks.

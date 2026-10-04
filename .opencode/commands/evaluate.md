@@ -4,7 +4,7 @@ agent: evaluator
 subtask: true
 ---
 
-Evaluate whether the current implementation is acceptable by auditing it against this repo's dry-run safety invariants and verification gates.
+Evaluate whether the current implementation is acceptable by auditing it against this repo's safety invariants (S1 to S10, plus L1 to L10 when a live path exists) and verification gates. Network readiness is judged by `/readiness`, not here.
 
 Load and apply the `evaluation` skill to guide the evaluation process.
 
@@ -15,7 +15,7 @@ Steps to follow:
 1. Load the `evaluation` skill for the evaluation framework, hard gates, and scoring rubric
 2. Inspect the current implementation (`git status`, `git log`, `git diff`, plus changed files) and gather evidence (`path:line`)
 3. Run the offline verification gates for the toolchains that changed (Rust and/or Solidity), in the order defined by the skill
-4. Audit the safety invariants (hard gate) and review correctness, tests, fail-closed behavior, and docs/pinned-data sync using `references/domain-checks.md` from the skill. For each area the diff touches, delegate a read-only review in parallel to the matching subagent (`rust-analyst`, `solidity-auditor`, `base-mev-analyst`, `security-expert`), then verify its Critical/High findings yourself before reporting. Never dispatch engineer agents.
+4. Audit the safety invariants S1 to S10 and, when live code exists, L1 to L10 (hard gate) and review correctness, tests, fail-closed behavior, and docs/pinned-data sync using `references/domain-checks.md` from the skill. For each area the diff touches, delegate a read-only review in parallel to the matching subagent (`@rust-analyst`, `@solidity-auditor`, `@base-mev-analyst`, `@security-expert`), then verify its Critical/High findings yourself before reporting. Never dispatch engineer agents.
 5. Produce a structured evaluation report with:
   - **Verdict**: ACCEPTABLE, NOT ACCEPTABLE, or INCONCLUSIVE (when required evidence needs a fork or network run that was not authorized)
   - **Score**: N/100 with the per-dimension breakdown
