@@ -132,6 +132,7 @@ Raising a compiled `hard_max` or an on-chain limit is a code change + new FREEZE
 ## What P2 / P3 implement from this record
 
 - **P2** (`@solidity-engineer` → `@solidity-auditor`): confirm the §4 verdict with tests — role matrix (operator cannot unpause/sweep/allowlist/change limits; pauser cannot unpause/sweep/allowlist/change limits), caps (`ExceedsMaxFlash`, `ExceedsHardCap`), atomic revert, fee>0 repay, callback auth (non-Vault reverts), pause behavior; decide the sweep-`to` item (default option (a)); re-pin `docs/FREEZE.md` if and only if the contract changes.
+> P2 verdict (2026-10-04): contract unchanged — L4 matrix confirmed against `contracts/FlashArbExecutor.sol`, sweep-`to` stays option (a) (runbook + G4 review, no Critical flaw found); gap-fill tests in `test/FlashArbExecutorP2.t.sol` (5 tests); `docs/FREEZE.md` untouched.
 - **P3** (`@base-mev-engineer` + `@rust-engineer` → `@rust-analyst`, `@security-expert`): `live` feature + `src/bin/live.rs`, profiles, `Signer` trait + sender, L5 pipeline wiring, ledger + breaker + kill switch, `--emit-evidence`, full L10 suite; `cargo build --bins` without the feature must contain no signer/sender symbols.
 - **P4**: evidence emission wiring, `RUNBOOK_SEPOLIA.md` D1–D12 extension, `RUNBOOK_MAINNET_CANARY.md`, `READINESS.md`.
 - **P5**: `/evaluate` then `/readiness testnet`.
