@@ -254,12 +254,17 @@ pub fn classify_head(last: Option<&HeadEvent>, next: &HeadEvent) -> HeadAction {
 
 /// Best-effort single poll of the configured feed with an overall timeout.
 /// Returns the live head when the feed yields one, else `None` (caller falls
-/// back to the fixture head with a clear log). Never blocks the paper loop:
-/// offline or unresponsive endpoints resolve to `None` within ~5 s, and a
-/// refused connection resolves immediately.
+/// back to the fixture head with a clear log). Transport: `ws(s)://` uses the
+/// `newHeads` subscription; `http(s)://` polls `eth_blockNumber` then reads
+/// the header (same [`HeadEvent`] shape, source logged as `http-poll`).
+/// Never blocks the paper loop: offline or unresponsive endpoints resolve to
+/// `None` within ~7 s, and a refused connection resolves immediately.
 pub async fn poll_head_once(mode: FeedMode, ws_url: &str) -> Option<HeadEvent> {
     match mode {
         FeedMode::Canonical => {
+            if ws_url.starts_with("http://") || ws_url.starts_with("https://") {
+                return poll_head_http(ws_url).await;
+            }
             let mut feed = CanonicalFeed::with_ws_url(redact_url(ws_url), ws_url);
             // ponytail: outer 7s > inner 3s+3s subscribe / 2s recv so slow path completes before outer fires; 8-iter bound is anti-spin.
             tokio::time::timeout(Duration::from_secs(7), feed.next_head())
@@ -283,6 +288,47 @@ pub async fn poll_head_once(mode: FeedMode, ws_url: &str) -> Option<HeadEvent> {
 /// standard Ethereum envelope; if OP-Stack deposit-type handling is needed,
 /// switch the network type to the Base/OP network crate recommended by the
 /// official Base docs (follow-up, pinned in `Cargo.lock`).
+async fn poll_head_http(url: &str) -> Option<HeadEvent> {
+    let parsed: reqwest::Url = match url.parse() {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!(url = %redact_url(url), "http head poll: bad URL {e:#}; using fixture head");
+            return None;
+        }
+    };
+    let provider = ProviderBuilder::new()
+        .disable_recommended_fillers()
+        .connect_http(parsed);
+    let header = match tokio::time::timeout(
+        Duration::from_secs(5),
+        provider.get_block_by_number(alloy::eips::BlockNumberOrTag::Latest),
+    )
+    .await
+    {
+        Ok(Ok(Some(b))) => b.header,
+        Ok(Ok(None)) => {
+            tracing::warn!("http head poll: latest block not found; using fixture head");
+            return None;
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("http head poll failed: {e:#}; using fixture head");
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!("http head poll timed out; using fixture head");
+            return None;
+        }
+    };
+    let h = header.hash;
+    tracing::info!(number = header.number, hash = %h, source = "http-poll", "head observed (live http poll)");
+    Some(HeadEvent {
+        number: header.number,
+        hash: h,
+        timestamp_ms: timestamp_ms(header.timestamp, None),
+        is_preconfirmation: false,
+    })
+}
+
 pub async fn connect_ws(url: &str) -> anyhow::Result<RootProvider<Ethereum>> {
     let ws = WsConnect::new(url);
     // Read-only dry-run probe: no fillers needed (no signing, no send).
@@ -488,5 +534,15 @@ mod tests {
         }
         assert!(is_canonical::<CanonicalFeed>());
         assert!(!is_canonical::<FlashblocksFeed>());
+    }
+
+    #[tokio::test]
+    async fn http_head_poll_refuses_bad_url_without_panic() {
+        assert!(
+            poll_head_once(FeedMode::Canonical, "not a url")
+                .await
+                .is_none()
+        );
+        assert!(poll_head_once(FeedMode::Canonical, "").await.is_none());
     }
 }
