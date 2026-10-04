@@ -56,3 +56,17 @@ waived=[G1,G2] with reasons — no overstatement. This entry's
 `stage_ready = "G3"` drill-entry manifest is superseded; it remains
 documented here for history but must NOT be reused (it fails closed
 under the new lock).
+
+## G3 drill evidence carries across the lockfix (2026-10-04)
+
+`git diff d8fadab..7474529` touches only `src/live/` (manifest/lock/
+profile stage rule + tests), `tests/live_l10.rs`, docs, skills, and
+`script/deploy-mocks-sepolia.sh`. `contracts/` is byte-identical, so
+the deployed executor (`0x41319bbA5DAa5537a59C3C01B4377D04Ba2479C3`,
+codehash `0x230c8f7c…`) and every D1–D12 on-chain outcome are
+unaffected: the lockfix changes off-chain startup gating only, and no
+drill transaction passes through the gated binary (all submits are the
+user's `cast send`). The new binary path at the new commit is proven
+separately by the honest re-arm (`manifest-drill-v2.json` ready=G0
+attempt=G3, ARMED, `evidence-d11b`). Therefore D1–D12 hashes stand as
+G3 exit evidence without re-running the drill.
