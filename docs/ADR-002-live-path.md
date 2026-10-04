@@ -46,7 +46,7 @@ Checked in this order; the first failure stops startup with a logged reason nami
 1. **Build lock**: binary built with `--features live`. The `live` binary target requires the feature; the paper binary never sets it.
 2. **Config lock**: the chosen profile sets `[live] enabled = true`. `config/default.toml` keeps `dry_run = true` and gains no live section.
 3. **Arm lock**: env `LIVE_ARM` equals the SHA-256 of the current readiness manifest. Missing or mismatched → refuse. The value is a hash, safe to compare in logs by match/mismatch only.
-4. **Manifest lock**: the manifest names `commit` == build-embedded commit, `chain_id` == profile and == RPC `eth_chainId`, `stage_ready` ≥ the profile's required stage (84532 needs G3 drill-ready inputs; 8453 canary needs G4; mainnet ramp needs G5), and `expires_at` in the future. The lock recomputes hashes of `docs/FREEZE.md`, the profile file, and `Cargo.lock` and compares them to manifest values — it reads the manifest, it does not trust it blindly.
+4. **Manifest lock**: the manifest names `commit` == build-embedded commit, `chain_id` == profile and == RPC `eth_chainId`, `attempt_stage` == the profile's required stage (84532 needs a G3 attempt; 8453 canary needs a G4 attempt; mainnet ramp needs G5), `stage_ready` strictly below `attempt_stage` (the attempt is uncompleted work — completion is proven only by stage-exit evidence, never by the manifest), an explicit `waived` entry with a non-empty reason for every rung strictly between `stage_ready` and `attempt_stage` (e.g. ready=G0 attempt=G3 requires waived=[G1,G2]; waivers outside that open interval refuse), and `expires_at` in the future. The lock recomputes hashes of `docs/FREEZE.md`, the profile file, and `Cargo.lock` and compares them to manifest values — it reads the manifest, it does not trust it blindly. Manifests written before `attempt_stage`/`waived` existed fail closed at parse.
 
 Strict startup order in `src/bin/live.rs`: L1 lock → role read-back (L4) → float-cap check → load `Signer` last. No key or KMS handle is loaded before L1 passes; each L1 failure asserts the signer constructor was never called (L10 test). `LIVE_ARM` comparison uses constant-time equality and logs match/mismatch only, never values.
 
@@ -168,6 +168,17 @@ Raising a compiled `hard_max` or an on-chain limit is a code change + new FREEZE
 > the `--eth-price` attestation (P5).
 
 ## Consequences
+
+- Attempt-authorization is separated from completion (fixes the
+  `docs/READINESS.md` stage-gating circularity, 2026-10-04): the lock arms
+  an *attempt* of the profile's required stage from honestly completed
+  state plus explicit, reasoned waivers for the rungs in between. It never
+  accepts a manifest that claims the required stage as already complete
+  (`stage_ready` must stay strictly below `attempt_stage`), so no honest
+  pre-completion label is blocked and no overstatement is needed — the
+  drill manifest says ready=G0 attempt=G3 waived=[G1,G2] with reasons.
+  Pre-fix manifests fail closed at parse; `LIVE_ARM` (SHA-256 of the exact
+  manifest bytes) covers the new fields with no mechanism change.
 
 - Paper behavior is untouched: default build has no signer/sender code paths reachable, and the S1 audit scan excludes exactly `src/live/` + `src/bin/live.rs` (plus the existing Discord pause exception). Signing `Signer` implementations live strictly inside `src/live/` (`#[cfg(feature = "live")]`); a shared trait definition, if any, is keyless (no env constructors).
 - Every new behavior ships with refusal/fail-closed tests and same-phase doc updates (`FREEZE.md`, runbooks, README) when code changes. This phase changes no code, so `FREEZE.md` and runbooks are untouched — recorded here deliberately, not by omission.

@@ -57,7 +57,8 @@ pub fn live_lock(inputs: &LockInputs<'_>) -> Result<(), LockError> {
     }
     // Arm lock (constant-time compare, match/mismatch only).
     verify_arm(inputs.live_arm, inputs.manifest_bytes)?;
-    // Manifest lock (commit, three-way chain id, stage, expiry, hashes).
+    // Manifest lock (commit, three-way chain id, attempt-authorization,
+    // expiry, hashes).
     verify_manifest(
         inputs.manifest,
         inputs.embedded_commit,
@@ -117,10 +118,16 @@ mod tests {
 
     fn manifest_bytes() -> Vec<u8> {
         let p = profile();
+        let required = p.live_section.stage_required.clone();
+        let req_order = super::super::profile::stage_order(&required).expect("profile stage valid");
         let m = ReadinessManifest {
             commit: "test-commit".to_string(),
             chain_id: p.base.chain_id,
-            stage_ready: p.live_section.stage_required.clone(),
+            stage_ready: super::super::profile::stage_label(req_order - 1)
+                .expect("required >= G1")
+                .to_string(),
+            attempt_stage: required,
+            waived: Vec::new(),
             expires_at: "2099-01-01T00:00:00Z".to_string(),
             hashes: super::super::manifest::ManifestHashes {
                 freeze_md: super::super::manifest::sha256_hex(b"freeze"),
@@ -146,10 +153,16 @@ mod tests {
         mutate(&mut p, &mut roles, &mut float);
         let bytes = manifest_bytes();
         // Recompute the manifest when the test mutated the profile: the
-        // manifest must track the profile under test (chain id, stage).
+        // manifest must track the profile under test (chain id, stages).
         let mut m = manifest_of(&bytes);
         m.chain_id = p.base.chain_id;
-        m.stage_ready = p.live_section.stage_required.clone();
+        m.attempt_stage = p.live_section.stage_required.clone();
+        let req_order =
+            super::super::profile::stage_order(&m.attempt_stage).expect("profile stage valid");
+        m.stage_ready = super::super::profile::stage_label(req_order - 1)
+            .expect("required >= G1")
+            .to_string();
+        m.waived = Vec::new();
         let m_bytes = serde_json::to_vec(&m).expect("serializes");
         // NOTE: hash/profile/commit elements keep the ORIGINAL bytes on
         // purpose (each refusal test below covers one lock element).

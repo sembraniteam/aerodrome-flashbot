@@ -32,8 +32,10 @@ pub struct LiveSection {
     /// Config lock (L1): the chosen profile must set this to `true`.
     /// `config/default.toml` has no live section at all.
     pub enabled: bool,
-    /// Minimum readiness stage that may arm this profile (`"G3"` on Sepolia,
-    /// `"G4"` on mainnet canary). The manifest's `stage_ready` must reach it.
+    /// Minimum readiness stage that may be attempted under this profile
+    /// (`"G3"` on Sepolia, `"G4"` on mainnet canary). The manifest's
+    /// `attempt_stage` must equal it while `stage_ready` stays strictly
+    /// below it (attempt-authorization, never a completion claim).
     pub stage_required: String,
     /// Executor contract this profile may trade through.
     pub executor: Address,
@@ -137,6 +139,20 @@ pub fn stage_order(stage: &str) -> Option<u8> {
         "G4" => Some(4),
         "G5" => Some(5),
         "G6" => Some(6),
+        _ => None,
+    }
+}
+
+/// Canonical label for a numeric rung. `None` = out of range.
+pub fn stage_label(order: u8) -> Option<&'static str> {
+    match order {
+        0 => Some("G0"),
+        1 => Some("G1"),
+        2 => Some("G2"),
+        3 => Some("G3"),
+        4 => Some("G4"),
+        5 => Some("G5"),
+        6 => Some("G6"),
         _ => None,
     }
 }
@@ -369,6 +385,15 @@ mod tests {
         assert_eq!(stage_order("G7"), None);
         assert_eq!(stage_order("g3"), None);
         assert_eq!(stage_order(""), None);
+    }
+
+    #[test]
+    fn stage_label_roundtrips_stage_order() {
+        for n in 0..=6 {
+            let label = stage_label(n).expect("G0..=G6 labels exist");
+            assert_eq!(stage_order(label), Some(n));
+        }
+        assert_eq!(stage_label(7), None);
     }
 
     #[test]

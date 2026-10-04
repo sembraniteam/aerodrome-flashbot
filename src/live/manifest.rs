@@ -2,9 +2,17 @@
 //! only after re-verification.
 //!
 //! The manifest (see the evidence schema) names a `commit`, `chain_id`,
-//! `stage_ready`, `expires_at`, and the hashes of `docs/FREEZE.md`, the
-//! profile file, and `Cargo.lock`. The lock recomputes all three hashes and
-//! compares them -- it reads the manifest, it does not trust it blindly.
+//! `stage_ready`, `attempt_stage`, `waived`, `expires_at`, and the hashes of
+//! `docs/FREEZE.md`, the profile file, and `Cargo.lock`. The lock recomputes
+//! all three hashes and compares them -- it reads the manifest, it does not
+//! trust it blindly.
+//!
+//! Attempt-authorization vs completion: the lock arms an *attempt* of the
+//! profile's required stage from honestly completed state (`stage_ready`,
+//! strictly below the attempt) plus explicit per-rung `waived` entries with
+//! reasons. It never accepts a manifest that claims the required stage as
+//! already complete. Manifests written before `attempt_stage`/`waived`
+//! existed fail closed at parse (no serde defaults on those fields).
 //!
 //! `LIVE_ARM` must equal the SHA-256 of the exact manifest bytes, compared
 //! in constant time; logs record match/mismatch only, never values.
@@ -14,7 +22,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 
-use super::profile::{LiveProfile, stage_order};
+use super::profile::{LiveProfile, stage_label, stage_order};
 
 /// Hashes the manifest pins (recomputed at startup, never trusted blindly).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,12 +32,30 @@ pub struct ManifestHashes {
     pub cargo_lock: String,
 }
 
+/// Explicit, auditable skip of one readiness rung between `stage_ready`
+/// and `attempt_stage`. `stage` is a `G0`..=`G6` label; `reason` is a
+/// non-empty human justification (blank/whitespace-only refuses).
+/// Coverage is set-based: duplicate entries for the same rung are
+/// tolerated, but any entry outside the open interval
+/// (`stage_ready`, `attempt_stage`) refuses.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Waiver {
+    pub stage: String,
+    pub reason: String,
+}
+
 /// Readiness manifest subset the L1 lock enforces.
+///
+/// No serde defaults: a manifest written before `attempt_stage`/`waived`
+/// existed fails to parse (fail closed). `LIVE_ARM` (SHA-256 of the exact
+/// manifest bytes) automatically covers the new fields.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReadinessManifest {
     pub commit: String,
     pub chain_id: u64,
     pub stage_ready: String,
+    pub attempt_stage: String,
+    pub waived: Vec<Waiver>,
     pub expires_at: String,
     pub hashes: ManifestHashes,
 }
@@ -42,9 +68,19 @@ pub enum ManifestError {
     ProfileChainMismatch(u64, u64),
     #[error("manifest chain_id {0} != rpc chain_id {1}")]
     RpcChainMismatch(u64, u64),
-    #[error("manifest stage_ready '{0}' below profile stage_required '{1}'")]
-    StageInsufficient(String, String),
-    #[error("manifest stage_ready '{0}' is not a G0..=G6 label")]
+    #[error("manifest attempt_stage '{0}' != profile stage_required '{1}'")]
+    AttemptMismatch(String, String),
+    #[error(
+        "manifest stage_ready '{0}' is not strictly below attempt_stage '{1}' (the attempt must be uncompleted work)"
+    )]
+    ReadyNotBelowAttempt(String, String),
+    #[error("missing waiver for stage '{0}' between stage_ready and attempt_stage")]
+    MissingWaiver(String),
+    #[error("waiver for stage '{0}' has an empty reason")]
+    EmptyWaiverReason(String),
+    #[error("waiver for stage '{0}' is outside (stage_ready, attempt_stage)")]
+    ExtraWaiver(String),
+    #[error("unknown stage label '{0}' (want G0..=G6)")]
     BadStage(String),
     #[error("manifest expires_at '{0}' is not past (now={1})")]
     Expired(String, u64),
@@ -135,8 +171,13 @@ pub fn parse_expiry_utc(s: &str) -> Result<u64, ManifestError> {
 }
 
 /// Manifest lock: commit == embedded build commit, chain ids agree three
-/// ways (manifest == profile == RPC), stage_ready reaches the profile's
-/// required stage, expiry is in the future, and the three pinned hashes
+/// ways (manifest == profile == RPC), then the attempt-authorization rule:
+/// `attempt_stage` equals the profile's required stage, `stage_ready` is a
+/// valid label strictly below `attempt_stage` (the attempt is uncompleted
+/// work -- completion is proven by stage-exit evidence, never by the
+/// manifest), every rung strictly between the two appears in `waived` with
+/// a non-empty reason, and no waiver names a rung outside that open
+/// interval. Then expiry is in the future, and the three pinned hashes
 /// recompute exactly.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_manifest(
@@ -164,15 +205,47 @@ pub fn verify_manifest(
             rpc_chain_id,
         ));
     }
-    let ready = stage_order(&manifest.stage_ready)
-        .ok_or_else(|| ManifestError::BadStage(manifest.stage_ready.clone()))?;
+    let attempt = stage_order(&manifest.attempt_stage)
+        .ok_or_else(|| ManifestError::BadStage(manifest.attempt_stage.clone()))?;
     let required = stage_order(&profile.live_section.stage_required)
         .ok_or_else(|| ManifestError::BadStage(profile.live_section.stage_required.clone()))?;
-    if ready < required {
-        return Err(ManifestError::StageInsufficient(
-            manifest.stage_ready.clone(),
+    if attempt != required {
+        return Err(ManifestError::AttemptMismatch(
+            manifest.attempt_stage.clone(),
             profile.live_section.stage_required.clone(),
         ));
+    }
+    let ready = stage_order(&manifest.stage_ready)
+        .ok_or_else(|| ManifestError::BadStage(manifest.stage_ready.clone()))?;
+    if ready >= attempt {
+        return Err(ManifestError::ReadyNotBelowAttempt(
+            manifest.stage_ready.clone(),
+            manifest.attempt_stage.clone(),
+        ));
+    }
+    // Each waiver entry, in order: known label, non-empty reason, inside
+    // the open interval (ready, attempt). Coverage is checked after, so a
+    // manifest that is both extra AND missing reports the extra first
+    // (deterministic; either way it refuses).
+    for w in &manifest.waived {
+        let order =
+            stage_order(&w.stage).ok_or_else(|| ManifestError::BadStage(w.stage.clone()))?;
+        if w.reason.trim().is_empty() {
+            return Err(ManifestError::EmptyWaiverReason(w.stage.clone()));
+        }
+        if order <= ready || order >= attempt {
+            return Err(ManifestError::ExtraWaiver(w.stage.clone()));
+        }
+    }
+    for rung in (ready + 1)..attempt {
+        let label = stage_label(rung).expect("rung inside (ready, attempt) is G0..=G6");
+        let covered = manifest
+            .waived
+            .iter()
+            .any(|w| stage_order(&w.stage) == Some(rung));
+        if !covered {
+            return Err(ManifestError::MissingWaiver(label.to_string()));
+        }
     }
     let expiry = parse_expiry_utc(&manifest.expires_at)?;
     if expiry <= now_secs {
@@ -200,12 +273,20 @@ mod tests {
 
     /// Test manifest matching the real profile files. Hashes are filled by
     /// the helper below from FIXTURE bytes (each L10 refusal test then
-    /// mutates one element).
+    /// mutates one element). The stage triple arms the adjacent attempt:
+    /// `stage_ready` one rung below the profile's required stage,
+    /// `attempt_stage` equal to it, no waivers needed.
     fn manifest_for(profile: &LiveProfile, chain_id: u64) -> (ReadinessManifest, Vec<u8>) {
+        let required = &profile.live_section.stage_required;
+        let req_order = super::super::profile::stage_order(required).expect("profile stage valid");
         let m = ReadinessManifest {
             commit: "test-commit".to_string(),
             chain_id,
-            stage_ready: profile.live_section.stage_required.clone(),
+            stage_ready: stage_label(req_order - 1)
+                .expect("required >= G1")
+                .to_string(),
+            attempt_stage: required.clone(),
+            waived: Vec::new(),
             expires_at: "2099-01-01T00:00:00Z".to_string(),
             hashes: ManifestHashes {
                 freeze_md: sha256_hex(b"freeze"),
@@ -215,6 +296,13 @@ mod tests {
         };
         let bytes = serde_json::to_vec(&m).expect("serializes");
         (m, bytes)
+    }
+
+    fn waiver(stage: &str, reason: &str) -> Waiver {
+        Waiver {
+            stage: stage.to_string(),
+            reason: reason.to_string(),
+        }
     }
 
     fn check(
@@ -261,16 +349,6 @@ mod tests {
             check(&m, &p, 8453),
             Err(ManifestError::RpcChainMismatch(84532, 8453))
         );
-        // Stage.
-        let (mut m, _) = manifest_for(&p, 84532);
-        m.stage_ready = "G2".to_string();
-        assert_eq!(
-            check(&m, &p, 84532),
-            Err(ManifestError::StageInsufficient(
-                "G2".to_string(),
-                "G3".to_string()
-            ))
-        );
         // Expiry.
         let (mut m, _) = manifest_for(&p, 84532);
         m.expires_at = "2020-01-01T00:00:00Z".to_string();
@@ -300,6 +378,229 @@ mod tests {
             check(&m, &p, 84532),
             Err(ManifestError::HashMismatch("Cargo.lock"))
         );
+    }
+
+    #[test]
+    fn attempt_must_equal_required_stage() {
+        // Sepolia requires G3: attempting above or below refuses even when
+        // the rest of the stage triple is internally consistent.
+        let p = LiveProfile::load(Path::new("config/sepolia.toml")).expect("profile");
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.attempt_stage = "G4".to_string();
+        m.stage_ready = "G2".to_string();
+        m.waived = vec![waiver("G3", "reason")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::AttemptMismatch(
+                "G4".to_string(),
+                "G3".to_string()
+            ))
+        );
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.attempt_stage = "G2".to_string();
+        m.stage_ready = "G0".to_string();
+        m.waived = vec![waiver("G1", "reason")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::AttemptMismatch(
+                "G2".to_string(),
+                "G3".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn ready_at_or_above_attempt_refuses_nothing_to_attempt() {
+        // attempt == ready: there is no uncompleted work to attempt.
+        let p = LiveProfile::load(Path::new("config/sepolia.toml")).expect("profile");
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G3".to_string();
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::ReadyNotBelowAttempt(
+                "G3".to_string(),
+                "G3".to_string()
+            ))
+        );
+        // ready above attempt: also refused (never equal/above).
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.attempt_stage = "G3".to_string();
+        m.stage_ready = "G4".to_string();
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::ReadyNotBelowAttempt(
+                "G4".to_string(),
+                "G3".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn gap_without_waiver_refuses() {
+        let p = LiveProfile::load(Path::new("config/sepolia.toml")).expect("profile");
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G0".to_string();
+        m.waived = Vec::new();
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::MissingWaiver("G1".to_string()))
+        );
+        // Partial coverage still refuses at the first uncovered rung.
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G0".to_string();
+        m.waived = vec![waiver("G1", "reason")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::MissingWaiver("G2".to_string()))
+        );
+    }
+
+    #[test]
+    fn waiver_with_empty_reason_refuses() {
+        let p = LiveProfile::load(Path::new("config/sepolia.toml")).expect("profile");
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G0".to_string();
+        m.waived = vec![waiver("G1", "shadow deferred to D1-D12"), waiver("G2", "")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::EmptyWaiverReason("G2".to_string()))
+        );
+        // Whitespace-only is empty too.
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G0".to_string();
+        m.waived = vec![waiver("G1", "ok"), waiver("G2", "   ")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::EmptyWaiverReason("G2".to_string()))
+        );
+    }
+
+    #[test]
+    fn drill_gap_with_reasons_arms() {
+        // The drill triple: ready=G0, attempt=G3, waived=[G1, G2] with
+        // reasons. Order of waivers must not matter.
+        let p = LiveProfile::load(Path::new("config/sepolia.toml")).expect("profile");
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G0".to_string();
+        m.waived = vec![
+            waiver("G2", "fork matrix deferred: mock-only drill entry"),
+            waiver("G1", "shadow run deferred: mock-only drill entry"),
+        ];
+        assert!(check(&m, &p, 84532).is_ok());
+        // Duplicate entries for the same rung are tolerated (set cover).
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G1".to_string();
+        m.waived = vec![waiver("G2", "first"), waiver("G2", "second")];
+        assert!(check(&m, &p, 84532).is_ok());
+    }
+
+    #[test]
+    fn waiver_outside_open_interval_refuses() {
+        // Fail closed: waivers for rungs outside (ready, attempt) are
+        // rejected, never silently ignored. At/above the attempt, at/below
+        // the ready, and past the profile minimum all refuse.
+        let p = LiveProfile::load(Path::new("config/sepolia.toml")).expect("profile");
+        // Waiver AT ready (G2) with the adjacent triple otherwise arming.
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.waived = vec![waiver("G2", "reason")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::ExtraWaiver("G2".to_string()))
+        );
+        // Waiver AT attempt (G3).
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.waived = vec![waiver("G3", "reason")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::ExtraWaiver("G3".to_string()))
+        );
+        // Waiver BELOW ready while the gap itself is covered.
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G1".to_string();
+        m.waived = vec![waiver("G2", "covers the gap"), waiver("G0", "stale")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::ExtraWaiver("G0".to_string()))
+        );
+        // Waiver ABOVE attempt while the gap itself is covered.
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G0".to_string();
+        m.waived = vec![
+            waiver("G1", "covers"),
+            waiver("G2", "covers"),
+            waiver("G4", "future"),
+        ];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::ExtraWaiver("G4".to_string()))
+        );
+    }
+
+    #[test]
+    fn unknown_stage_labels_refuse() {
+        let p = LiveProfile::load(Path::new("config/sepolia.toml")).expect("profile");
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.attempt_stage = "G7".to_string();
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::BadStage("G7".to_string()))
+        );
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "g2".to_string();
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::BadStage("g2".to_string()))
+        );
+        let (mut m, _) = manifest_for(&p, 84532);
+        m.stage_ready = "G0".to_string();
+        m.waived = vec![waiver("G1", "ok"), waiver("nope", "ok")];
+        assert_eq!(
+            check(&m, &p, 84532),
+            Err(ManifestError::BadStage("nope".to_string()))
+        );
+        // A profile with an unknown required stage refuses too.
+        let mut bad = p.clone();
+        bad.live_section.stage_required = "nope".to_string();
+        let (m, _) = manifest_for(&p, 84532);
+        assert_eq!(
+            verify_manifest(
+                &m,
+                "test-commit",
+                &bad,
+                84532,
+                1_700_000_000,
+                b"freeze",
+                b"profile",
+                b"lock",
+            ),
+            Err(ManifestError::BadStage("nope".to_string()))
+        );
+    }
+
+    #[test]
+    fn old_manifest_without_new_fields_fails_closed_at_parse() {
+        // Pre-fix manifests (no attempt_stage/waived) must refuse via the
+        // serde parse-error path -- they can never reach the lock.
+        let old = serde_json::json!({
+            "commit": "test-commit",
+            "chain_id": 84532,
+            "stage_ready": "G3",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "hashes": {
+                "freeze_md": "00",
+                "profile": "00",
+                "cargo_lock": "00"
+            }
+        });
+        let raw = serde_json::to_vec(&old).expect("serializes");
+        let parsed: Result<ReadinessManifest, _> = serde_json::from_slice(&raw);
+        assert!(parsed.is_err(), "old manifest must fail closed at parse");
+        // Missing only `waived` still refuses.
+        let mut partial = old.clone();
+        partial["attempt_stage"] = serde_json::json!("G3");
+        let raw = serde_json::to_vec(&partial).expect("serializes");
+        let parsed: Result<ReadinessManifest, _> = serde_json::from_slice(&raw);
+        assert!(parsed.is_err(), "manifest without waived must fail closed");
     }
 
     #[test]

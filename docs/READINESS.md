@@ -31,7 +31,7 @@ Enforcement: `docs/RUNBOOK_SEPOLIA.md` D9 sweeps profit to the
 owner address; canary runbook sweeps to owner daily.
 Revisit only if sweeps become frequent/automated.
 
-## Stage-gating circularity for mock drills (found 2026-10-04, pre-G3)
+## Stage-gating circularity for mock drills (found 2026-10-04, pre-G3) — FIXED by the attempt/waiver lock change described below
 
 `LiveProfile::validate` (`src/live/profile.rs:173-185`) forces
 `stage_required >= G3` on Sepolia, and the L1 lock
@@ -45,3 +45,14 @@ and single-use (`artifacts/readiness/sepolia-drill/manifest-drill.json`
 + `.NOTE.txt`), never as exit evidence. G3 verdict rests solely on
 D1–D12 on-chain evidence. Proper fix before any non-mock run:
 separate attempt-authorization from completion in the lock policy.
+
+FIX (2026-10-04): the lock now enforces `attempt_stage ==
+profile.stage_required` with `stage_ready` strictly below it and an
+explicit reasoned `waived` entry per rung in between
+(`src/live/manifest.rs`: `AttemptMismatch` / `ReadyNotBelowAttempt` /
+`MissingWaiver` / `EmptyWaiverReason` / `ExtraWaiver`; pre-fix manifests
+fail closed at parse). The drill manifest now says ready=G0 attempt=G3
+waived=[G1,G2] with reasons — no overstatement. This entry's
+`stage_ready = "G3"` drill-entry manifest is superseded; it remains
+documented here for history but must NOT be reused (it fails closed
+under the new lock).

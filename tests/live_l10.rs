@@ -11,7 +11,7 @@ use base_flash_arb::live::breaker::{Breaker, BreakerError, TripReason};
 use base_flash_arb::live::ledger::{Ledger, LedgerKind};
 use base_flash_arb::live::lock::{LockInputs, StartupProbe, startup_sequence};
 use base_flash_arb::live::manifest::{ReadinessManifest, sha256_hex};
-use base_flash_arb::live::profile::LiveProfile;
+use base_flash_arb::live::profile::{LiveProfile, stage_label, stage_order};
 use base_flash_arb::live::roles::RoleMatrix;
 use base_flash_arb::live::sender::{NonceManager, OnchainExecutor};
 use base_flash_arb::live::signer::SignerKind;
@@ -23,14 +23,23 @@ fn sepolia() -> LiveProfile {
 
 /// Build a manifest matching the REAL files, with the arm over the exact
 /// manifest bytes (the same bytes the binary would hash for `LIVE_ARM`).
+/// The stage triple arms the adjacent attempt: `stage_ready` one rung
+/// below the profile's required stage, `attempt_stage` equal to it, no
+/// waivers needed.
 fn real_manifest(profile: &LiveProfile) -> (ReadinessManifest, Vec<u8>) {
     let freeze = std::fs::read("docs/FREEZE.md").expect("freeze");
     let prof = std::fs::read("config/sepolia.toml").expect("profile bytes");
     let lock = std::fs::read("Cargo.lock").expect("lock");
+    let required = profile.live_section.stage_required.clone();
+    let req_order = stage_order(&required).expect("profile stage valid");
     let m = ReadinessManifest {
         commit: "test-commit".to_string(),
         chain_id: profile.base.chain_id,
-        stage_ready: profile.live_section.stage_required.clone(),
+        stage_ready: stage_label(req_order - 1)
+            .expect("required >= G1")
+            .to_string(),
+        attempt_stage: required,
+        waived: Vec::new(),
         expires_at: "2099-01-01T00:00:00Z".to_string(),
         hashes: base_flash_arb::live::manifest::ManifestHashes {
             freeze_md: sha256_hex(&freeze),

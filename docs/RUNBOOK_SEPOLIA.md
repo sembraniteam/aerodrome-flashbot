@@ -230,15 +230,73 @@ submit→book→reconcile state machine it exercises is the offline-tested
 `sender` path (move-enforced intent, `bookable()` gating, breaker on
 mismatch).
 
+The lock arms an *attempt* of the profile's required stage, never a
+completion claim: your drill manifest MUST say `attempt_stage = "G3"`
+(equal to the Sepolia profile's `stage_required`), `stage_ready = "G0"`
+(the honestly completed stage), and one reasoned waiver per rung in
+between (`G1`, `G2`). Anything else refuses — see the attempt/waiver
+semantics in
+`.opencode/skills/go-live-readiness/references/evidence-schema.md`.
+
 1. Arm the bot (proves L1 lock + roles + float against YOUR drill
-   values): build with `--features live`, prepare the readiness manifest
-   for the drill commit, export `LIVE_ARM`, create the kill-switch flag
-   file with exactly `OK`, then run `./target/debug/live --config
-   <your-sepolia-profile-copy> --manifest <manifest> --eth-price-cents
-   <cents> --eth-price-asof <now>` (USER-ACTION: profile copy lives
-   OFF-repo — never edit the committed `config/sepolia.toml` placeholders
-   in place; copy it and fill YOUR drill addresses).
-   Expect `ARMED ... (no trading loop; runbooks execute)`.
+   values):
+   1. Build with `--features live` on the drill commit:
+      ```bash
+      cargo build --bins --features live
+      COMMIT="$(git rev-parse HEAD)"  # must be the drill commit; tree clean
+      ```
+   2. Copy the profile OFF-repo and fill YOUR drill addresses (never edit
+      the committed `config/sepolia.toml` placeholders in place):
+      ```bash
+      mkdir -p artifacts/readiness/sepolia-drill   # git-ignored
+      cp config/sepolia.toml artifacts/readiness/sepolia-drill/profile-drill.toml
+      # USER-ACTION: edit profile-drill.toml — executor, vault, routers,
+      # tokens, quoters, owner/operator/pauser, onchain_max_flash_usdc.
+      ```
+   3. Write the drill manifest (USER-ACTION: replace the three `<...>`
+      hashes with YOUR computed values from step 4 — nothing below is
+      pre-filled with real hashes):
+      ```bash
+      cat > artifacts/readiness/sepolia-drill/manifest-drill.json <<EOF
+      {
+        "commit": "$COMMIT",
+        "chain_id": 84532,
+        "stage_ready": "G0",
+        "attempt_stage": "G3",
+        "waived": [
+          {"stage": "G1", "reason": "mock-only drill entry: shadow run deferred, G3 exit rests on D1-D12"},
+          {"stage": "G2", "reason": "mock-only drill entry: fork matrix deferred, G3 exit rests on D1-D12"}
+        ],
+        "expires_at": "USER-ACTION: e.g. 14 days out, strict UTC YYYY-MM-DDTHH:MM:SSZ",
+        "hashes": {
+          "freeze_md": "USER-ACTION: sha256 of docs/FREEZE.md",
+          "profile": "USER-ACTION: sha256 of YOUR profile-drill.toml",
+          "cargo_lock": "USER-ACTION: sha256 of Cargo.lock"
+        }
+      }
+      EOF
+      ```
+   4. Fill the hashes from YOUR files, then verify each one matches:
+      ```bash
+      sha256sum docs/FREEZE.md artifacts/readiness/sepolia-drill/profile-drill.toml Cargo.lock
+      # paste the three digests into manifest-drill.json, then re-check:
+      grep -c USER-ACTION artifacts/readiness/sepolia-drill/manifest-drill.json  # expect 0
+      ```
+   5. Arm (the arm covers the EXACT manifest bytes — any later edit
+      invalidates it, recompute if you touch the file):
+      ```bash
+      export LIVE_ARM="$(sha256sum artifacts/readiness/sepolia-drill/manifest-drill.json | awk '{print $1}')"
+      printf OK > artifacts/live-sepolia.kill   # flag file: exactly OK, else stopped
+      # (matches kill_switch_file in your profile-drill.toml copy; run from the repo root)
+      ./target/debug/live --config artifacts/readiness/sepolia-drill/profile-drill.toml \
+        --manifest artifacts/readiness/sepolia-drill/manifest-drill.json \
+        --eth-price-cents <USER-ACTION: fresh cents> \
+        --eth-price-asof <USER-ACTION: now-secs>
+      ```
+      Expect `ARMED ... (no trading loop; runbooks execute)`. Refusal is a
+      PASS when the reason names the failed lock element
+      (build/config/arm/manifest/roles/float/signer): fix the cause, never
+      bypass. The binary never prints secret values (match/mismatch only).
 2. Simulate the exact calldata at latest head (`cast call`); confirm
    profit ≥ min + margin.
 3. Submit via `cast send` (operator drill key); capture `<tx>`.

@@ -30,9 +30,13 @@ paper binary (default build)      live binary (feature "live", off by default)
 3. **Arm lock**: env `LIVE_ARM` equals the SHA-256 of the current readiness manifest. A missing or mismatched value
    means refuse.
 4. **Manifest lock**: the manifest (see `evidence-schema.md`) names a `commit` equal to the commit embedded at build
-   time, `chain_id` equal to the profile and to the RPC's `eth_chainId`, a `stage_ready` at least the stage required
-   by the profile (84532 needs G3 drill-ready inputs, 8453 canary needs G4, mainnet ramp needs G5), and `expires_at`
-   in the future.
+   time, `chain_id` equal to the profile and to the RPC's `eth_chainId`, an `attempt_stage` equal to the stage
+   required by the profile (84532 needs a G3 attempt, 8453 canary needs a G4 attempt, mainnet ramp needs G5), a
+   `stage_ready` strictly below `attempt_stage` (the attempt is uncompleted work — completion is proven only by
+   stage-exit evidence, never by the manifest), an explicit `waived` entry with a non-empty reason for every rung
+   strictly between `stage_ready` and `attempt_stage` (e.g. ready=G0 attempt=G3 requires waived=[G1,G2]; waivers
+   outside that open interval refuse), and `expires_at` in the future. Manifests written before
+   `attempt_stage`/`waived` existed fail closed at parse.
 
 The lock reads the manifest; it does not trust it blindly. It recomputes the hashes of `docs/FREEZE.md`, the profile,
 and `Cargo.lock` and compares them with the manifest values.
