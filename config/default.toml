@@ -56,6 +56,8 @@ token_a = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
 token_b = "0x4200000000000000000000000000000000000006"
 decimals_a = 18
 decimals_b = 18
+# Non-USDC-quoted: paper loop skips execution sizing (executor is
+# USDC-flash-only); stays enabled for --fork-check estimator accuracy.
 enabled = true
 
 # Placeholder: stays disabled until the verified cbETH address is added.

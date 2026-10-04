@@ -228,6 +228,22 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
         // Exercise the allowlist lookup helper too.
         debug_assert!(cfg.pair(&pair.name).is_some());
         metrics.record_seen();
+        // Executor is USDC-flash-only: `execute` reverts with
+        // `DirectionMismatch` unless one leg's input token is USDC
+        // (see `contracts/FlashArbExecutor.sol`). Applying USDC
+        // notionals (6dp) to an 18dp/18dp pair would size dust, so
+        // skip non-USDC-quoted pairs here instead. Off-chain
+        // estimator accuracy for such pairs stays covered by
+        // `--fork-check` (WETH-denominated sizes), never by this loop.
+        if pair.token_a != addresses::USDC_NATIVE && pair.token_b != addresses::USDC_NATIVE {
+            tracing::info!(
+                pair = %pair.name,
+                "non-USDC-quoted pair: paper signal skipped (executor USDC-only)"
+            );
+            metrics.record_risk_reject();
+            metrics.record_pair_seen(&pair.name, "-");
+            continue;
+        }
         let t0 = Instant::now();
         tracing::info!(
             pair = %pair.name,
@@ -312,7 +328,7 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
                 match sim::decide_from_simulation(
                     &sim_res,
                     size,
-                    costs.flat_costs(),
+                    &costs,
                     min_net,
                     args.tolerance_bps,
                 ) {

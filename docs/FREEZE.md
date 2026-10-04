@@ -32,6 +32,14 @@
 | `0x04e45aaf`      | Uniswap SwapRouter02 `exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))` (no deadline field)                                |
 | mock `0xd5bcb9b5` | `swap(address,address,uint256,uint256,address)` — TESTS ONLY, never allowlisted on production routers                                                |
 
+## Executor asset scope (USDC-only)
+
+The flash asset is always USDC: `execute` reverts with `DirectionMismatch`
+unless the leg-1 input token is USDC (`contracts/FlashArbExecutor.sol`). The
+paper loop therefore skips non-USDC-quoted pairs (`AERO/WETH` stays allowlisted
+for `--fork-check` estimator accuracy in WETH units, never for execution), and
+USDC notionals (6dp) are never applied to 18dp/18dp pairs.
+
 ## Codehashes
 
 Capture at freeze time from a mainnet fork (read-only); re-capture with the

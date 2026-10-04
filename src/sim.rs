@@ -6,6 +6,8 @@
 
 use alloy::primitives::U256;
 
+use crate::profit::{CostModel, net_profit};
+
 /// Result of a dry-run simulation of one arbitrage attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimulationResult {
@@ -78,7 +80,7 @@ impl std::fmt::Display for RejectReason {
 pub fn decide_from_simulation(
     sim: &SimulationResult,
     amount_in: U256,
-    flat_costs: U256,
+    costs: &CostModel,
     min_net: U256,
     tolerance_bps: u64,
 ) -> SimDecision {
@@ -92,11 +94,10 @@ pub fn decide_from_simulation(
             reason: RejectReason::QuoteDiverged,
         };
     }
-    let Some(net) = sim
-        .onchain_out
-        .checked_sub(flat_costs)
-        .and_then(|v| v.checked_sub(amount_in))
-    else {
+    // Single net definition: haircut the gross, subtract flat costs and
+    // the principal via `net_profit` (same path as `profit::optimal_size`
+    // / `evaluate_both_directions`). Returns `None` on underflow.
+    let Some(net) = net_profit(sim.onchain_out, amount_in, costs) else {
         return SimDecision::Reject {
             reason: RejectReason::CostsExceedOutput,
         };
@@ -145,8 +146,9 @@ mod tests {
             gas_estimate: 200_000,
             would_revert: true,
         };
+        let costs = CostModel::default();
         assert_eq!(
-            decide_from_simulation(&sim, U256::from(1u64), U256::ZERO, U256::ZERO, 50),
+            decide_from_simulation(&sim, U256::from(1u64), &costs, U256::ZERO, 50),
             SimDecision::Reject {
                 reason: RejectReason::WouldRevert
             }
@@ -161,8 +163,9 @@ mod tests {
             gas_estimate: 200_000,
             would_revert: false,
         };
+        let costs = CostModel::default();
         assert_eq!(
-            decide_from_simulation(&sim, U256::from(1u64), U256::ZERO, U256::ZERO, 50),
+            decide_from_simulation(&sim, U256::from(1u64), &costs, U256::ZERO, 50),
             SimDecision::Reject {
                 reason: RejectReason::QuoteDiverged
             }
@@ -177,11 +180,12 @@ mod tests {
             gas_estimate: 200_000,
             would_revert: false,
         };
+        let costs = CostModel::default();
         assert_eq!(
             decide_from_simulation(
                 &sim,
                 U256::from(999_000u64),
-                U256::ZERO,
+                &costs,
                 U256::from(5_000u64),
                 50
             ),
@@ -219,16 +223,51 @@ mod tests {
             gas_estimate: 200_000,
             would_revert: false,
         };
+        let costs = CostModel {
+            l2_gas_cost: U256::from(1_000u64),
+            ..CostModel::default()
+        };
         assert_eq!(
             decide_from_simulation(
                 &sim,
                 U256::from(1_000_000u64),
-                U256::from(1_000u64),
+                &costs,
                 U256::from(5_000u64),
                 50
             ),
             SimDecision::Submit {
                 net: U256::from(19_000u64)
+            }
+        );
+    }
+
+    #[test]
+    fn bps_haircut_applies_before_min_gate() {
+        // Same gross/principal as `good_sim_submits`, but a 5% slippage
+        // haircut cuts gross to 969_000 < 1_000_000 + 1_000 costs, so the
+        // unified net path rejects with CostsExceedOutput instead of
+        // submitting. Guards against the old flat-only divergence.
+        let sim = SimulationResult {
+            onchain_out: U256::from(1_020_000u64),
+            offchain_out: U256::from(1_020_000u64),
+            gas_estimate: 200_000,
+            would_revert: false,
+        };
+        let costs = CostModel {
+            l2_gas_cost: U256::from(1_000u64),
+            slippage_bps: 500,
+            ..CostModel::default()
+        };
+        assert_eq!(
+            decide_from_simulation(
+                &sim,
+                U256::from(1_000_000u64),
+                &costs,
+                U256::from(5_000u64),
+                50
+            ),
+            SimDecision::Reject {
+                reason: RejectReason::CostsExceedOutput
             }
         );
     }

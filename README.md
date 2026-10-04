@@ -75,7 +75,9 @@ FORK_URL=https://mainnet.base.org cargo run -- --fork-matrix
 | `max_in_flight`            | `1` (pinned)         |                                  |
 | `feed_mode`                | `canonical`          | `flashblocks` = pending-tag stub |
 
-Allowlist: `WETH/USDC`, `AERO/USDC`, `AERO/WETH` enabled; `cbETH/ETH` disabled placeholder. Secrets via env only:
+Allowlist: `WETH/USDC`, `AERO/USDC`, `AERO/WETH` enabled; `cbETH/ETH` disabled placeholder. Executor is USDC-flash-only
+(`DirectionMismatch` unless one leg inputs USDC), so the paper loop skips non-USDC-quoted pairs (`AERO/WETH` stays
+allowlisted for `--fork-check` estimator accuracy, never for execution). Secrets via env only:
 `DISCORD_WEBHOOK_URL`, `PAUSER_KEY`, `DRILL_OWNER_KEY`, `*_RPC_URL`.
 
 ## Verification
