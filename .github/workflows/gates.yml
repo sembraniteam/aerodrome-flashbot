@@ -1,0 +1,12 @@
+name: gates
+on: [push, pull_request]
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: chmod +x .githooks/commit-message .githooks/pre-commit
+      - run: bash .githooks/pre-commit
+      - run: .opencode/skills/go-live-readiness/scripts/collect-evidence.sh --run-gates
