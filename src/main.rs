@@ -116,10 +116,15 @@ async fn probe_ws(cfg: &BotConfig, args: &Args) {
 }
 
 async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
-    // PAPER MODE: force dry-run regardless of file content, loudly.
-    if !cfg.dry_run {
+    // PAPER MODE: force dry-run regardless of file content, loudly. The clone
+    // makes the override an assignment (not just a log line): everything
+    // below reads the effective config with `dry_run == true`.
+    let mut effective = cfg.clone();
+    if !effective.dry_run {
         tracing::warn!("config dry_run=false ignored: paper binary forces dry-run");
     }
+    effective.dry_run = true;
+    let cfg = &effective;
     log_address_registry();
     // Discord alerts: opt-in only (--discord-alerts). URL comes solely from
     // DISCORD_WEBHOOK_URL; empty URL = stdout fallback. Sender is

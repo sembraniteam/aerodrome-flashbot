@@ -43,9 +43,9 @@
 ## 2. Deploy (owner, Sepolia, dust)
 
 1. `forge build` green locally first.
-2. Deploy from the OWNER drill address with a manual, reviewed command. There
-   is no `script/` dir and no broadcast helper in this repo on purpose —
-   every mainnet-class action is typed by a human:
+2. Deploy from the OWNER drill address with a manual, reviewed command. Sepolia
+   mock deploys use `script/deploy-mocks-sepolia.sh` (chain-id gated to 84532);
+   any other mainnet-class action is typed by a human, never by a broadcast helper:
    ```bash
    forge create contracts/FlashArbExecutor.sol:FlashArbExecutor \
      --rpc-url "$BASE_SEPOLIA_RPC_URL" \
