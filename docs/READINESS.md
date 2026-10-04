@@ -30,3 +30,18 @@ recipient enforced by runbook + G4 review; see
 Enforcement: `docs/RUNBOOK_SEPOLIA.md` D9 sweeps profit to the
 owner address; canary runbook sweeps to owner daily.
 Revisit only if sweeps become frequent/automated.
+
+## Stage-gating circularity for mock drills (found 2026-10-04, pre-G3)
+
+`LiveProfile::validate` (`src/live/profile.rs:173-185`) forces
+`stage_required >= G3` on Sepolia, and the L1 lock
+(`src/live/manifest.rs:167-176`) forces
+`manifest.stage_ready >= stage_required`. No honest pre-drill label
+reaches G3 (G3 exit needs D11 itself), so a mock-only drill cannot
+ARM without either a stage overstatement or a code change.
+For the mock-only drill (ladder entry: G0), the drill manifest asserts
+`stage_ready = "G3"` strictly as drill-entry authorization, OFF-repo
+and single-use (`artifacts/readiness/sepolia-drill/manifest-drill.json`
++ `.NOTE.txt`), never as exit evidence. G3 verdict rests solely on
+D1–D12 on-chain evidence. Proper fix before any non-mock run:
+separate attempt-authorization from completion in the lock policy.
