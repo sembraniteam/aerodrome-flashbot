@@ -6,10 +6,13 @@ compatibility: opencode
 
 # Go-Live Readiness
 
-Takes this project from a dry-run harness to a bot that can run on Base Sepolia and Base mainnet **without removing the safety properties that make dry-run trustworthy**. Two jobs:
+Takes this project from a dry-run harness to a bot that can run on Base Sepolia and Base mainnet **without
+removing the safety properties that make dry-run trustworthy**. Two jobs:
 
-1. **Capability**: a live path that is separate, triple-locked, capped, observable, and fail-closed (`references/live-contract.md`).
-2. **Proof**: an evidence bundle that shows, stage by stage, that the bot is ready for the next stage (`references/evidence-schema.md`).
+1. **Capability**: a live path that is separate, triple-locked, capped, observable, and fail-closed
+   (`references/live-contract.md`).
+2. **Proof**: an evidence bundle that shows, stage by stage, that the bot is ready for the next stage
+   (`references/evidence-schema.md`).
 
 Companion files, load them when the step needs them:
 
@@ -41,7 +44,12 @@ Companion files, load them when the step needs them:
 1. **Pick the target stage.** From the user's argument (`testnet`, `canary`, `mainnet`) or ask once. Mapping:
    `testnet` = G3 ready, `canary` = G5 ready, `mainnet` = G6 ready. Load `references/promotion-ladder.md`.
 2. **Collect offline evidence.** Run `scripts/collect-evidence.sh --run-gates` from the repo root. It writes an
-   evidence directory under `artifacts/readiness/<UTC>/` and prints only the path and a pass/fail summary.
+   evidence directory under `artifacts/readiness/<UTC>/` and prints only the path and a pass/fail summary. The S1 and S3
+   scans are heuristics, so each hit is ALLOWED, REVIEW, or FAIL. If anything is REVIEW, G0 stays INCONCLUSIVE: read
+   each flagged line yourself (the output has path and line number only), run
+   `scripts/collect-evidence.sh --suggest-allowlist`, and report which entries look legitimate. The auditor cannot edit
+   the repo, so the **user** reviews and commits accepted entries to `docs/readiness-allowlist.txt`, then re-collects.
+   An S1 hit outside the Discord path and the live paths is FAIL and cannot be allowlisted.
 3. **Audit the live contract.** If `src/` contains a live path, check every L-invariant in
    `references/live-contract.md` and the S-invariants from the `evaluation` skill. If no live path exists, the target
    stage is NOT READY at G0 with the missing capability listed.
@@ -94,13 +102,13 @@ Companion files, load them when the step needs them:
 Implementation is delegated; this skill defines the order. Each phase ends with a checkpoint where the user confirms
 before the next phase starts.
 
-| Phase | Output                                                                                         | Implementer(s)                          |
-|-------|------------------------------------------------------------------------------------------------|-----------------------------------------|
-| P1    | Design record: live path, chain profiles, signer trait, readiness-manifest lock, ADR-002       | `architect`, `smart-contract-architect` |
-| P2    | Executor changes if needed (roles, caps, events), tests, `docs/FREEZE.md` re-pin               | `solidity-engineer`                     |
-| P3    | `live` feature and binary, chain profiles, signer, nonce/gas, ledger, circuit breaker, drills  | `base-mev-engineer`, `rust-engineer`    |
-| P4    | Evidence emission, `docs/RUNBOOK_SEPOLIA.md` extension, `docs/RUNBOOK_MAINNET_CANARY.md`       | `base-mev-engineer`, `release-manager`  |
-| P5    | Independent review: `/evaluate`, then `/readiness testnet`                                     | `evaluator`, `readiness-auditor`        |
+| Phase | Output                                                                                        | Implementer(s)                            |
+|-------|-----------------------------------------------------------------------------------------------|-------------------------------------------|
+| P1    | Design record: live path, chain profiles, signer trait, readiness-manifest lock, ADR-002      | `@architect`, `@smart-contract-architect` |
+| P2    | Executor changes if needed (roles, caps, events), tests, `docs/FREEZE.md` re-pin              | `@solidity-engineer`                      |
+| P3    | `live` feature and binary, chain profiles, signer, nonce/gas, ledger, circuit breaker, drills | `@base-mev-engineer`, `@rust-engineer`    |
+| P4    | Evidence emission, `docs/RUNBOOK_SEPOLIA.md` extension, `docs/RUNBOOK_MAINNET_CANARY.md`      | `@base-mev-engineer`, `@release-manager`  |
+| P5    | Independent review: `/evaluate`, then `/readiness testnet`                                    | `@evaluator`, `@readiness-auditor`        |
 
 Rules for every phase:
 

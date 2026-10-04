@@ -57,7 +57,7 @@ An implementation agent (e.g. `@rust-engineer`, `@solidity-engineer`) fixes the 
 ## What You Evaluate
 
 1. **Safety invariants (hard gate)**
-    - Execution isolation: no signing keys, signing, broadcasting, or mainnet writes outside the `live` feature and its own binary; the paper binary forces dry-run
+    - Execution isolation: no signing keys, signing, broadcasting, or mainnet writes anywhere except pauser-only pause signing in the Discord path (allowlisted by line hash) and code in `src/live/` or `src/bin/live.rs` behind the `live` feature; the paper binary forces dry-run
     - Live-path invariants L1 to L10 (Live Lock, chain profiles, signer isolation, executor roles, fail-closed pre-submit, reconciliation, breaker, ledger, evidence emission, offline tests) when live code exists
     - Discord holds the pauser key only; `discord_exposed(Resume) == false`; no resume, unpause, sweep, allowlist, or limit changes via Discord
     - Executor selectors, secrets handling, layout rules (no `forge-std`, no `.sol` in `src/`), offline tests, Sepolia chain-id gate, risk limits and fail-closed gates, English-only repo

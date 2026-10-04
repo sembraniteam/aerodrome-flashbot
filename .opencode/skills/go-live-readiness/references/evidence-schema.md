@@ -12,7 +12,8 @@ env.txt                tool versions (rustc, cargo, forge), OS, UTC time
 git.txt                commit, branch, clean/dirty, diffstat
 gates/                 one .log per command with PASS/FAIL line first
 scans/                 file-name-only results of secret and layout scans
-invariants/            S1-S10 and L1-L10 grep outputs (counts and path:line only)
+invariants/            S1-S10 and L1-L10 scan outputs: path, line number, and line hash only (never line content);
+                       allowlist-used.txt is a copy of the adjudications in force
 runs/                  --emit-evidence summaries from shadow, canary, ramp runs (user supplied)
 onchain.json           user-supplied tx hashes and addresses per drill case (G3 to G5)
 report.md              the readiness report
@@ -35,6 +36,7 @@ report.md              the readiness report
     "cargo_lock": "<sha256>",
     "foundry_toml": "<sha256>",
     "profile": "<sha256 of the chain profile used>",
+    "allowlist": "<sha256 of docs/readiness-allowlist.txt, or 'missing'>",
     "executor_codehash": "<0x... from chain or forge inspect>"
   },
   "gates": {

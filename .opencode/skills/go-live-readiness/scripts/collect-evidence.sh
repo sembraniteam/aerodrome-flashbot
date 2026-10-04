@@ -2,16 +2,25 @@
 # collect-evidence.sh - offline, read-only evidence collector for base-flash-arb.
 #
 # Modes (run from the repo root):
-#   collect-evidence.sh [--run-gates] [--out DIR] [--chain-id N] [--ttl-days N]
-#       Collect evidence into DIR (default artifacts/readiness/<UTC>). G0 only.
+#   collect-evidence.sh [--run-gates] [--out DIR] [--chain-id N] [--ttl-days N] [--allowlist FILE]
+#       Collect evidence into DIR (default artifacts/readiness/<UTC>). Establishes G0 only.
+#   collect-evidence.sh --suggest-allowlist [--allowlist FILE]
+#       Print allowlist entries (path, line number, line hash; never line content) for invariant hits that need
+#       human adjudication. A human reviews them and commits the accepted ones. Writes nothing to the repo.
 #   collect-evidence.sh --seal DIR
 #       Recompute SHA256SUMS after the auditor updated manifest.json, print the arm hash.
-#   collect-evidence.sh --verify DIR
-#       Check SHA256SUMS, commit, file hashes and expiry. Exit 0 only if fresh and intact.
+#   collect-evidence.sh --verify DIR [--allowlist FILE]
+#       Check SHA256SUMS, commit, file hashes (incl. allowlist) and expiry. Exit 0 only if fresh and intact.
 #
-# Safety: never contacts the network on purpose (cargo runs with CARGO_NET_OFFLINE, RPC env vars are unset for
-# gates), never prints secret values (secret scans list file names only), never writes outside the output dir,
-# never signs, deploys, or sends transactions.
+# Invariant scans (S1, S3) are heuristics, so each hit gets one of three states:
+#   ALLOWED  an exact entry "INV path line-hash" exists in the allowlist (default docs/readiness-allowlist.txt);
+#            the hash is of the trimmed matched line, so editing that line invalidates the entry
+#   REVIEW   needs a human decision; the invariant result is REVIEW and G0 stays INCONCLUSIVE
+#   FAIL     S1 hit outside the files where pauser-only signing is designed to live; invariant FAIL, G0 NOT READY
+#
+# Safety: never contacts the network on purpose (RPC env vars are unset for gates), never prints secret values or
+# matched line content, writes only inside the output dir (a temp dir in --suggest-allowlist mode), and never signs,
+# deploys, or sends transactions.
 
 set -u -o pipefail
 
@@ -21,6 +30,7 @@ CHAIN_ID="0"
 TTL_DAYS=14
 MODE="collect"
 TARGET=""
+ALLOWLIST="docs/readiness-allowlist.txt"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -28,9 +38,11 @@ while [ $# -gt 0 ]; do
     --out) OUT="${2:?--out needs a directory}"; shift ;;
     --chain-id) CHAIN_ID="${2:?--chain-id needs a number}"; shift ;;
     --ttl-days) TTL_DAYS="${2:?--ttl-days needs a number}"; shift ;;
+    --allowlist) ALLOWLIST="${2:?--allowlist needs a file}"; shift ;;
+    --suggest-allowlist) MODE="suggest" ;;
     --seal) MODE="seal"; TARGET="${2:?--seal needs a directory}"; shift ;;
     --verify) MODE="verify"; TARGET="${2:?--verify needs a directory}"; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -54,11 +66,11 @@ json_field() { # json_field FILE KEY  (flat string/number keys only; first match
 
 [ -d .git ] || [ -f .git ] || { echo "run from the repository root" >&2; exit 2; }
 
-# ---------- seal ----------
 write_sums() {
   ( cd "$1" && find . -type f ! -name SHA256SUMS | LC_ALL=C sort | while read -r f; do sha "$f"; done > SHA256SUMS )
 }
 
+# ---------- seal ----------
 if [ "$MODE" = "seal" ]; then
   [ -f "$TARGET/manifest.json" ] || { echo "no manifest.json in $TARGET" >&2; exit 2; }
   write_sums "$TARGET"
@@ -79,11 +91,122 @@ if [ "$MODE" = "verify" ]; then
   [ "$(json_field "$M" freeze_md)" = "$(hash_of docs/FREEZE.md)" ] && echo "PASS docs/FREEZE.md hash" || { echo "FAIL docs/FREEZE.md changed"; rc=1; }
   [ "$(json_field "$M" cargo_lock)" = "$(hash_of Cargo.lock)" ] && echo "PASS Cargo.lock hash" || { echo "FAIL Cargo.lock changed"; rc=1; }
   [ "$(json_field "$M" foundry_toml)" = "$(hash_of foundry.toml)" ] && echo "PASS foundry.toml hash" || { echo "FAIL foundry.toml changed"; rc=1; }
+  [ "$(json_field "$M" allowlist)" = "$(hash_of "$ALLOWLIST")" ] && echo "PASS allowlist hash" || { echo "FAIL allowlist changed (adjudications are stale)"; rc=1; }
   exp=$(json_field "$M" expires_at)
   if [ "$(to_epoch "$exp")" -gt "$(date -u +%s)" ]; then echo "PASS not expired ($exp)"; else echo "FAIL expired or unreadable expiry"; rc=1; fi
   echo "stage_ready=$(json_field "$M" stage_ready) chain_id=$(json_field "$M" chain_id)"
   [ $rc -eq 0 ] && echo "LIVE_ARM=$(hash_of "$M")"
   exit $rc
+fi
+
+# ---------- invariant scans (shared by collect and suggest) ----------
+# Files where pauser-only signing is designed to live (S3). S1 hits here need adjudication; elsewhere they fail.
+S1_CANDIDATES="src/bin/discord-bot.rs src/discord.rs"
+
+is_s1_candidate() { for c in $S1_CANDIDATES; do [ "$1" = "$c" ] && return 0; done; return 1; }
+
+is_allowed() { # inv path hash
+  [ -f "$ALLOWLIST" ] || return 1
+  awk -v a="$1" -v b="$2" -v c="$3" '!/^[[:space:]]*#/ && $1==a && $2==b && $3==c {f=1} END{exit !f}' "$ALLOWLIST"
+}
+
+# scan_hits ERE paths... -> path<TAB>line<TAB>hash of trimmed matched line (content is never printed)
+scan_hits() {
+  local re="$1"; shift
+  grep -rnE --exclude-dir=live --exclude=live.rs "$re" "$@" 2>/dev/null | while IFS= read -r row; do
+    local path="${row%%:*}" rest="${row#*:}"
+    local ln="${rest%%:*}" content="${rest#*:}"
+    local trimmed h
+    trimmed=$(printf '%s' "$content" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    h=$(printf '%s' "$trimmed" | sha | awk '{print $1}')
+    printf '%s\t%s\t%s\n' "$path" "$ln" "$h"
+  done
+}
+
+classify() { # inv outfile ; stdin: path<TAB>line<TAB>hash -> status<TAB>path<TAB>line<TAB>hash
+  local inv="$1" st
+  while IFS=$'\t' read -r path ln h; do
+    if is_allowed "$inv" "$path" "$h"; then st=ALLOWED
+    elif [ "$inv" = "S1" ] && ! is_s1_candidate "$path"; then st=FAIL
+    else st=REVIEW; fi
+    printf '%s\t%s\t%s\t%s\n' "$st" "$path" "$ln" "$h"
+  done > "$2"
+}
+
+verdict_of() { # classified file -> PASS | REVIEW | FAIL
+  if grep -q '^FAIL' "$1" 2>/dev/null; then echo FAIL
+  elif grep -q '^REVIEW' "$1" 2>/dev/null; then echo REVIEW
+  else echo PASS; fi
+}
+
+verdict_empty() { [ ! -s "$1" ] && echo PASS || echo FAIL; }
+
+run_scans() { # DIR -> writes invariants/*, sets S1 S1B S2 S3 S6 S8 LIVE_PRESENT
+  local d="$1"; mkdir -p "$d/invariants"
+
+  # S1: signing or sending outside the live feature (src/live/ and src/bin/live.rs are excluded by design)
+  scan_hits 'PrivateKeySigner|LocalSigner|EthereumWallet|send_transaction|send_raw_transaction|eth_sendRawTransaction|\.sign_' src \
+    | classify S1 "$d/invariants/S1-signing-hits.tsv"
+  S1=$(verdict_of "$d/invariants/S1-signing-hits.tsv")
+
+  # S1b: live code must be feature-gated (mod live behind cfg, live binary requires the feature)
+  {
+    find src -name '*.rs' 2>/dev/null | while read -r f; do
+      awk -v F="$f" 'FNR==1{prev=""} /^[ \t]*(pub[ \t]+)?mod[ \t]+live[ \t]*[;{]/ { if (prev !~ /cfg\(feature *= *"live"\)/) print "ungated mod live: " F ":" FNR } {prev=$0}' "$f"
+    done
+    if [ -f src/bin/live.rs ] && ! grep -qE 'required-features[[:space:]]*=[[:space:]]*\[[[:space:]]*"live"' Cargo.toml 2>/dev/null; then
+      echo "src/bin/live.rs exists but Cargo.toml has no required-features = [\"live\"]"
+    fi
+  } > "$d/invariants/S1b-live-gating.txt"
+  S1B=$(verdict_empty "$d/invariants/S1b-live-gating.txt")
+
+  # S2: default config stays dry-run
+  grep -nE "^[[:space:]]*dry_run[[:space:]]*=" config/default.toml > "$d/invariants/S2-default-dry-run.txt" 2>/dev/null
+  S2=$(grep -qE 'dry_run[[:space:]]*=[[:space:]]*true' "$d/invariants/S2-default-dry-run.txt" 2>/dev/null && echo PASS || echo FAIL)
+
+  # S3: owner/operator key names in the Discord path. A bare string is ambiguous (a custody-refusal guard names
+  # them too), so every unlisted hit is REVIEW, never an automatic FAIL or PASS.
+  scan_hits 'OWNER_KEY|OPERATOR_KEY|DRILL_OWNER_KEY' src/discord.rs src/bin/discord-bot.rs \
+    | classify S3 "$d/invariants/S3-discord-key-names.tsv"
+  S3=$(verdict_of "$d/invariants/S3-discord-key-names.tsv")
+
+  # S6: layout and toolchain rules
+  {
+    grep -rn "forge-std" contracts test foundry.toml remappings.txt 2>/dev/null
+    test -d lib && echo "VIOLATION: lib/ exists"
+    test -s remappings.txt && echo "VIOLATION: remappings.txt not empty"
+    find src -name '*.sol' 2>/dev/null
+    grep -rn '#\[path' src/ 2>/dev/null
+  } > "$d/invariants/S6-layout.txt"
+  S6=$(verdict_empty "$d/invariants/S6-layout.txt")
+
+  # S8: Sepolia deploy script is chain-id gated
+  grep -n "84532" script/deploy-mocks-sepolia.sh > "$d/invariants/S8-sepolia-gate.txt" 2>/dev/null
+  S8=$([ -s "$d/invariants/S8-sepolia-gate.txt" ] && echo PASS || echo FAIL)
+
+  # L presence (live path exists?)
+  { grep -rn 'feature = "live"' src/ 2>/dev/null; ls src/bin/live.rs 2>/dev/null; ls -d src/live 2>/dev/null; grep -rn "LIVE_ARM" src/ 2>/dev/null; } > "$d/invariants/L-live-path-present.txt"
+  LIVE_PRESENT=$([ -s "$d/invariants/L-live-path-present.txt" ] && echo yes || echo no)
+}
+
+# ---------- suggest-allowlist ----------
+if [ "$MODE" = "suggest" ]; then
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  run_scans "$TMP"
+  n=0
+  echo "# Review each entry before committing it to $ALLOWLIST. Format: INV path line-hash"
+  echo "# An entry is a human decision that this exact line is acceptable. Never allowlist a line you have not read."
+  for f in S1-signing-hits:S1 S3-discord-key-names:S3; do
+    file="$TMP/invariants/${f%%:*}.tsv"; inv="${f##*:}"
+    while IFS=$'\t' read -r st path ln h; do
+      [ "$st" = "REVIEW" ] || continue
+      printf '%s %s %s   # %s:%s  (read it, then decide: pauser-only signing / custody-refusal guard / other)\n' "$inv" "$path" "$h" "$path" "$ln"
+      n=$((n+1))
+    done < "$file"
+  done
+  fails=$(cat "$TMP/invariants/S1-signing-hits.tsv" | grep -c '^FAIL' || true)
+  echo "# $n entries need review; $fails S1 hit(s) outside the designed signing files cannot be allowlisted (fix the code)."
+  exit 0
 fi
 
 # ---------- collect ----------
@@ -133,7 +256,7 @@ for i in "${!GATE_NAMES[@]}"; do
   GATE_RESULTS+=("$res")
 done
 
-# ---- scans: file names and counts only, never values ----
+# ---- secret scans: file names and counts only, never values ----
 {
   echo "# tracked secret-like files (must be empty; .env.example is acceptable)"
   git ls-files | grep -E '(^|/)(\.env(\..*)?|config/local\.toml|discord-audit\.csv|results\.csv)$' | grep -v '\.env\.example$'
@@ -145,44 +268,20 @@ done
   git grep -lE '0x[0-9a-fA-F]{64}' 2>/dev/null
 } > "$OUT/scans/secret-patterns-files.txt"
 TRACKED_SECRETS=$(grep -vc '^#' "$OUT/scans/tracked-secret-files.txt" 2>/dev/null || true)
-
-# ---- invariants (heuristic, counts and path:line only) ----
-count() { grep -c . "$1" 2>/dev/null || echo 0; }
-S1_HITS="$OUT/invariants/S1-signing-in-src.txt"
-grep -rnE "PrivateKeySigner|LocalSigner|EthereumWallet|send_transaction|send_raw_transaction|eth_sendRawTransaction|\.sign_" src/ 2>/dev/null \
-  | grep -v 'cfg(feature = "live")' > "$S1_HITS"
-S2_DRY="$OUT/invariants/S2-default-dry-run.txt"
-grep -nE "^[[:space:]]*dry_run[[:space:]]*=" config/default.toml > "$S2_DRY" 2>/dev/null
-S3_HITS="$OUT/invariants/S3-discord-keys.txt"
-grep -rnE "OWNER_KEY|OPERATOR_KEY|DRILL_OWNER_KEY" src/discord.rs src/bin/discord-bot.rs 2>/dev/null > "$S3_HITS"
-S6_FILE="$OUT/invariants/S6-layout.txt"
-{
-  grep -rn "forge-std" contracts test foundry.toml remappings.txt 2>/dev/null
-  test -d lib && echo "VIOLATION: lib/ exists"
-  test -s remappings.txt && echo "VIOLATION: remappings.txt not empty"
-  find src -name '*.sol' 2>/dev/null
-  grep -rn '#\[path' src/ 2>/dev/null
-} > "$S6_FILE"
-S8_FILE="$OUT/invariants/S8-sepolia-gate.txt"
-grep -n "84532" script/deploy-mocks-sepolia.sh > "$S8_FILE" 2>/dev/null
-L1_FILE="$OUT/invariants/L-live-path-present.txt"
-{ grep -rn 'feature = "live"' src/ 2>/dev/null; ls src/bin/live.rs 2>/dev/null; grep -rn "LIVE_ARM" src/ 2>/dev/null; } > "$L1_FILE"
-
-verdict_empty() { [ ! -s "$1" ] && echo PASS || echo FAIL; }
-S1=$(verdict_empty "$S1_HITS")
-S2=$(grep -qE 'dry_run[[:space:]]*=[[:space:]]*true' "$S2_DRY" 2>/dev/null && echo PASS || echo FAIL)
-S3=$(verdict_empty "$S3_HITS")
 S5=$([ "${TRACKED_SECRETS:-0}" = "0" ] && echo PASS || echo FAIL)
-S6=$(verdict_empty "$S6_FILE")
-S8=$([ -s "$S8_FILE" ] && echo PASS || echo FAIL)
-LIVE_PRESENT=$([ -s "$L1_FILE" ] && echo yes || echo no)
+
+run_scans "$OUT"
+[ -f "$ALLOWLIST" ] && cp "$ALLOWLIST" "$OUT/invariants/allowlist-used.txt"
 
 # ---- G0 verdict ----
-G0=READY
+G0=READY; NOTE=""
 for r in "${GATE_RESULTS[@]}"; do [ "$r" = "PASS" ] || G0=INCONCLUSIVE; done
-for r in "${GATE_RESULTS[@]}"; do [ "$r" = "FAIL" ] && G0="NOT READY"; done
-for r in "$S1" "$S2" "$S3" "$S5" "$S6" "$S8"; do [ "$r" = "FAIL" ] && G0="NOT READY"; done
+for r in "$S1" "$S1B" "$S3"; do
+  if [ "$r" = "REVIEW" ]; then [ "$G0" = "READY" ] && G0=INCONCLUSIVE; NOTE="invariant hits need adjudication: run --suggest-allowlist, read each line, commit accepted entries to $ALLOWLIST, re-collect"; fi
+done
 [ "$CLEAN" = "true" ] || { [ "$G0" = "READY" ] && G0=INCONCLUSIVE; }
+for r in "${GATE_RESULTS[@]}"; do [ "$r" = "FAIL" ] && G0="NOT READY"; done
+for r in "$S1" "$S1B" "$S2" "$S3" "$S5" "$S6" "$S8"; do [ "$r" = "FAIL" ] && G0="NOT READY"; done
 STAGE_READY=$([ "$G0" = "READY" ] && echo G0 || echo NONE)
 LEVEL=$([ "$G0" = "READY" ] && echo E1 || echo E0)
 
@@ -202,7 +301,8 @@ cat <<JSON
     "freeze_md": "$(hash_of docs/FREEZE.md)",
     "cargo_lock": "$(hash_of Cargo.lock)",
     "foundry_toml": "$(hash_of foundry.toml)",
-    "default_toml": "$(hash_of config/default.toml)"
+    "default_toml": "$(hash_of config/default.toml)",
+    "allowlist": "$(hash_of "$ALLOWLIST")"
   },
   "gates": {
 JSON
@@ -213,7 +313,8 @@ for i in "${!GATE_NAMES[@]}"; do
 done
 cat <<JSON
   },
-  "invariants": { "S1": "$S1", "S2": "$S2", "S3": "$S3", "S5": "$S5", "S6": "$S6", "S8": "$S8" },
+  "invariants": { "S1": "$S1", "S1b": "$S1B", "S2": "$S2", "S3": "$S3", "S5": "$S5", "S6": "$S6", "S8": "$S8" },
+  "adjudication_note": "$NOTE",
   "stages": {
     "G0": { "verdict": "$G0" },
     "G1": { "verdict": "INCONCLUSIVE", "needs": "runs/shadow-*.json from --emit-evidence" },
@@ -233,7 +334,8 @@ write_sums "$OUT"
 echo "evidence: $OUT"
 echo "commit: $COMMIT (clean=$CLEAN)"
 for i in "${!GATE_NAMES[@]}"; do printf '  %-18s %s\n' "${GATE_NAMES[$i]}" "${GATE_RESULTS[$i]}"; done
-echo "  invariants: S1=$S1 S2=$S2 S3=$S3 S5=$S5 S6=$S6 S8=$S8 (heuristic; auditor must read in context)"
+echo "  invariants: S1=$S1 S1b=$S1B S2=$S2 S3=$S3 S5=$S5 S6=$S6 S8=$S8 (heuristic; REVIEW needs a human decision)"
 echo "  live path present: $LIVE_PRESENT"
+[ -n "$NOTE" ] && echo "  note: $NOTE"
 echo "G0: $G0   stage_ready: $STAGE_READY   evidence_level: $LEVEL"
 [ "$RUN_GATES" -eq 1 ] || echo "note: gates were not run; re-run with --run-gates"

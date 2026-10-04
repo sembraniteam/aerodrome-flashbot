@@ -1,0 +1,11 @@
+# docs/readiness-allowlist.txt  (copy this file to docs/ in the repo root and commit it)
+#
+# Human adjudications for the heuristic invariant scans (S1 signing, S3 key names).
+# Format, one per line:  INV  path  sha256-of-trimmed-line     # reason
+# Generate candidates with:
+#   .opencode/skills/go-live-readiness/scripts/collect-evidence.sh --suggest-allowlist
+# Rules:
+#   - Add an entry only after reading the exact line. The hash binds the entry to that line; editing it invalidates it.
+#   - S1 entries are valid only in src/bin/discord-bot.rs and src/discord.rs, for pauser-only pause signing.
+#   - S3 entries are valid only for custody-refusal guards that never read or use an owner/operator key value.
+#   - Review changes to this file like code: it is hashed into the readiness manifest.

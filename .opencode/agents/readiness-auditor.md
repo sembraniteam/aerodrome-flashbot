@@ -97,7 +97,7 @@ Live steps (deploying, funding, sending drill transactions) are done by the huma
 1. Parse the target (`testnet` = G3, `canary` = G5, `mainnet` = G6); if absent, ask once.
 2. Run `.opencode/skills/go-live-readiness/scripts/collect-evidence.sh --run-gates --chain-id <84532|8453|0>`; if a bundle for the current commit already exists, run `--verify <dir>` first and reuse it only when it passes.
 3. Load `references/promotion-ladder.md` and check exit criteria stage by stage; load `references/live-contract.md` and audit L1 to L10 when a live path exists. No live path means the target is NOT READY at G0 with the missing capability listed.
-4. Review supplied evidence under `runs/` and `onchain.json`; verify on-chain items read-only when authorized.
+4. Adjudicate REVIEW hits: open each flagged file and line, decide whether it is pauser-only pause signing (S1) or a custody-refusal guard that never uses a key (S3), and report your decision with `path:line`. Run `collect-evidence.sh --suggest-allowlist` and hand the entries to the user to commit; you cannot edit the allowlist yourself, and you never allowlist a line you did not read. Review supplied evidence under `runs/` and `onchain.json`; verify on-chain items read-only when authorized.
 5. Update `manifest.json` stage verdicts, `stage_ready`, and `evidence_level` inside the bundle, write `report.md`, then run `collect-evidence.sh --seal <dir>` and report the arm hash.
 6. Report using the skill's template.
 

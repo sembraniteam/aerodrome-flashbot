@@ -52,11 +52,14 @@ A test that needs network access to pass is itself a finding.
 
 Load `references/domain-checks.md` and check every safety invariant S1 to S10.
 
-- **S1** Execution isolation: the paper binary and the default build contain no signing keys, signing, broadcasting, or
-  mainnet writes. Live code is allowed only behind the `live` cargo feature and its own binary, and only when the
-  live-path invariants L1 to L10 also pass (see below)
+- **S1** Execution isolation: the paper binary, the shared library, and the default build contain no signing keys,
+  signing, broadcasting, or mainnet writes. Two exceptions exist and nothing else is allowed: (a) the `discord-bot`
+  binary (`src/bin/discord-bot.rs`, `src/discord.rs`) may sign pause transactions with the pauser key only, per S3;
+  (b) live code is allowed only in `src/live/` (declared with `#[cfg(feature = "live")] mod live;`) and
+  `src/bin/live.rs` (`required-features = ["live"]`), and only when L1 to L10 also pass (see below)
 - **S2** Paper binary forces dry-run regardless of config; `config/default.toml` keeps `dry_run = true`
-- **S3** Discord holds the pauser key only; `discord_exposed(Resume) == false`; no resume, unpause, sweep, allowlist, or
+- **S3** Discord holds the pauser key only (a string naming the owner or operator key is acceptable only as a custody
+  refusal guard that never reads or uses a key; adjudicate each hit by reading the line); `discord_exposed(Resume) == false`; no resume, unpause, sweep, allowlist, or
   limit changes via Discord
 - **S4** Executor selectors: UniversalRouter explicit-selector-only; mock `SWAP_SELECTOR` never enabled on production;
   production selectors unchanged

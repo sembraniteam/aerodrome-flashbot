@@ -9,6 +9,7 @@ discord-audit.csv
 # Local secrets / endpoints: never commit real RPC URLs or keys.
 config/local.toml
 .env
+artifacts
 
 # macOS
 .DS_Store

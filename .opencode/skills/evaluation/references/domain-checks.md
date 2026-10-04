@@ -7,17 +7,27 @@ Secret-related commands use `-l` (file names only) on purpose, so values never r
 
 ## 1. Safety Invariants (hard gate)
 
-### S1: Execution isolation (no signing or broadcasting outside the `live` feature)
+### S1: Execution isolation (no signing or broadcasting outside the two allowed places)
 
 ```bash
-grep -rnE "PrivateKeySigner|LocalSigner|EthereumWallet|send_transaction|send_raw_transaction|eth_sendRawTransaction|\.sign_" src/
-grep -rnEi "wallet|signer|broadcast" src/ | head -40
+.opencode/skills/go-live-readiness/scripts/collect-evidence.sh --suggest-allowlist
+grep -rnE --exclude-dir=live --exclude=live.rs "PrivateKeySigner|LocalSigner|EthereumWallet|send_transaction|send_raw_transaction|eth_sendRawTransaction|\.sign_" src/
 grep -rn 'feature = "live"' src/
 ```
 
-Pass when every hit is inside `#[cfg(feature = "live")]` code or the live binary, and `cargo build --bins` without the
-feature contains no signer or sender code. A signing or sending path outside the feature is Critical. Check that new
-`eth_call` usage stays read-only. Any live code must also satisfy section 1b.
+Allowed places, and nothing else:
+
+1. **Pauser-only signing in the Discord path** (`src/bin/discord-bot.rs`, `src/discord.rs`): signing a pause
+   transaction with `PAUSER_KEY`, and only that. Read each hit; it must not sign anything but a pause call and must not
+   read an owner or operator key. A hit here is adjudicated by a human with an allowlist entry
+   (`docs/readiness-allowlist.txt`: `INV path sha256-of-trimmed-line`). Editing the line invalidates the entry.
+2. **Live code** in `src/live/` (module declared with `#[cfg(feature = "live")]`) and `src/bin/live.rs`
+   (`required-features = ["live"]` in `Cargo.toml`). It must also satisfy section 1b.
+
+Pass when every hit is allowlisted (path and line hash) or inside the live paths, and `cargo build --bins` without the
+feature contains no signer or sender code. A signing or sending hit anywhere else is Critical, and it cannot be
+allowlisted: fix the code. Check that new `eth_call` usage stays read-only. An `ungated mod live` or a live binary
+without `required-features` is a violation too (the collector reports it as S1b).
 
 ### S2: Paper binary forces dry-run
 
@@ -32,6 +42,11 @@ grep -rn "discord_exposed" src/
 grep -rnEi "resume|unpause|sweep|allowlist|set_limit|max_flash|owner|operator" src/discord.rs src/bin/discord-bot.rs
 grep -rnE "PAUSER_KEY|OWNER_KEY|OPERATOR_KEY|DRILL_OWNER_KEY" src/
 ```
+
+A bare match on an owner or operator key name is ambiguous: a custody-refusal guard names them too. Read each hit.
+Acceptable: a guard that refuses to start, or errors, when such a variable is present, and never uses its value.
+Violation: any code that reads the value, builds a signer from it, or passes it on. The collector marks every unlisted
+hit REVIEW and never auto-passes it; accepted hits go into `docs/readiness-allowlist.txt` by line hash.
 
 Pass when `discord_exposed(Resume)` is still `false`, no new Discord command can resume, unpause, sweep, change an
 allowlist, or change a limit, and `src/bin/discord-bot.rs` reads only `PAUSER_KEY`. Any owner or operator key referenced

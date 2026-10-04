@@ -15,7 +15,9 @@ paper binary (default build)      live binary (feature "live", off by default)
          shared: feeds, estimator, risk, sequencer gate, sim::verify_quote, ledger
 ```
 
-- Live code sits behind `#[cfg(feature = "live")]` in its own modules and its own binary (`src/bin/live.rs`).
+- Live code lives only in `src/live/` (declared as `#[cfg(feature = "live")] mod live;`) and `src/bin/live.rs`
+  (`[[bin]] name = "live"` with `required-features = ["live"]`). The audit scans exclude exactly these paths, so
+  signing or sending code anywhere else is flagged. The Discord pause signer is the one designed exception (S1).
   `cargo build --bins` without the feature must contain no signer or sender symbols.
 - The strategy pipeline depends on traits (`Feed`, `Simulator`, `Executor`, `Clock`, `Notifier`, `Ledger`). Dry-run
   wires a `NoopExecutor`; live wires `OnchainExecutor`. Dry-run can never reach `OnchainExecutor`.
