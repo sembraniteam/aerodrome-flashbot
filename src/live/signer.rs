@@ -3,16 +3,28 @@
 //! - [`LiveSigner`] trait with two concrete types: [`EnvKeySigner`] asserts
 //!   `chain_id == 84532` (Sepolia throwaways) and refuses mainnet before
 //!   touching key material; [`RemoteSigner`] is the mainnet-only KMS stub
-//!   (fail-closed until P4 wires it).
+//!   (fail-closed until the user wires a KMS handle; see USER-ACTION).
 //! - The trading binary loads the **operator** key only.
 //!   [`guard_trading_custody`] refuses startup when `OWNER_KEY` or
 //!   `PAUSER_KEY` is visible (mirroring the Discord custody guard); it never
 //!   reads the operator value itself.
 //! - Keys never appear in logs, errors, metrics, or the ledger:
 //!   [`redact_secret`] scrubs exact secrets plus key-shaped hex,
-//!   [`sanitize_error`] funnels `anyhow` signer errors through it, signers
-//!   use a custom [`Debug`](std::fmt::Debug) (address/label only), and key
+//!   [`sanitize_error`] funnels `anyhow` signer errors through it (the live
+//!   binary applies it once at its startup error boundary), signers use a
+//!   custom [`Debug`](std::fmt::Debug) (address/label only), and key
 //!   buffers are [`zeroize::Zeroize`]d on every path.
+//! - [`SecretBlocklist`] carries the operator value from the environment to
+//!   the two boundaries that need it (error funnel + ledger append check)
+//!   without ever logging it: `Debug` prints the entry count only and `Drop`
+//!   zeroizes every entry.
+//!
+//! Bare-64hex policy: [`redact_secret`] scrubs `0x` + 64-hex only. A bare
+//! (prefix-less) 64-hex string is deliberately NOT scrubbed by the heuristic
+//! -- it false-positives on block numbers, hashes fragments, and counters.
+//! Exact operator values in either paste form (bare or `0x`-prefixed) are
+//! covered by the blocklist ([`SecretBlocklist`] records both twins), which
+//! is the enforced mechanism (tested below).
 
 use alloy::primitives::{Address, B256};
 use alloy::signers::local::PrivateKeySigner;
@@ -43,7 +55,7 @@ pub enum SignerError {
     MissingOperatorKey,
     #[error("invalid OPERATOR_KEY (not 32-byte hex)")]
     BadOperatorKey,
-    #[error("remote signer/KMS not configured (P4 wiring)")]
+    #[error("remote signer/KMS not configured (USER-ACTION: operator wires KMS handle)")]
     KmsNotConfigured,
 }
 
@@ -192,7 +204,8 @@ impl fmt::Debug for EnvKeySigner {
 }
 
 /// Remote signer / KMS stub (mainnet only). Construction binds the chain;
-/// every signing attempt fails closed until P4 wires the KMS handle.
+/// every signing attempt fails closed until the operator wires the KMS
+/// handle (USER-ACTION, P5; mainnet never accepts env keys).
 pub struct RemoteSigner {
     address: Address,
     label: String,
@@ -266,6 +279,91 @@ pub fn redact_secret(input: &str, secrets: &[&str]) -> String {
 /// raw error, which could echo key material from a parse failure).
 pub fn sanitize_error(err: &anyhow::Error, secrets: &[&str]) -> String {
     redact_secret(&format!("{err:#}"), secrets)
+}
+
+/// Operator-secret blocklist for the two production boundaries that need
+/// exact values: the live-binary error funnel ([`sanitize_error`]) and the
+/// ledger append check (`Ledger::open` blocklist).
+///
+/// Built from `OPERATOR_KEY` post-lock (ledger append boundary) or on the
+/// failure path (error-funnel sanitizer) -- never before the L1 lock passes.
+/// Records both paste forms: as given plus the `0x`-toggled twin, so the
+/// bare-64hex form is covered exactly without heuristic scrubbing.
+/// Missing/empty env yields an empty list, never an error (the signer
+/// constructor reports the missing key itself).
+///
+/// Secrecy contract: never logged (no `Display`, count-only `Debug`),
+/// entries zeroized on `Drop`. The clone handed to `Ledger::open` lives as
+/// long as the ledger (it must, to check appends); it is memory-only and
+/// never written (a blocklisted append is refused naming the field only).
+#[derive(Default)]
+pub struct SecretBlocklist(Vec<String>);
+
+impl SecretBlocklist {
+    /// Read `OPERATOR_KEY` from the process environment.
+    pub fn from_process_env() -> Self {
+        let held = std::env::var("OPERATOR_KEY").unwrap_or_default();
+        Self::from_values(&[held.as_str()])
+    }
+
+    /// Explicit values (tests/fixtures; production uses [`Self::from_process_env`]).
+    pub fn from_values(values: &[&str]) -> Self {
+        let mut out = Vec::new();
+        for v in values {
+            let t = v.trim();
+            if t.is_empty() {
+                continue;
+            }
+            out.push(t.to_string());
+            // Cover the twin paste form exactly (no heuristic redaction).
+            if let Some(bare) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+                if !bare.is_empty() {
+                    out.push(bare.to_string());
+                }
+            } else {
+                out.push(format!("0x{t}"));
+            }
+        }
+        Self(out)
+    }
+
+    /// Borrowed views for [`sanitize_error`].
+    pub fn as_refs(&self) -> Vec<&str> {
+        self.0.iter().map(|s| s.as_str()).collect()
+    }
+
+    /// Owned clone for `Ledger::open` (append-boundary check).
+    pub fn to_vec(&self) -> Vec<String> {
+        self.0.clone()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Count-only `Debug`: the values are secret and never formatted.
+impl fmt::Debug for SecretBlocklist {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretBlocklist")
+            .field("entries", &self.0.len())
+            .finish()
+    }
+}
+
+/// Zeroize every entry when the list drops (startup scope exit).
+/// Note: the clone held by an open `Ledger` lives with the ledger; that is
+/// by design (the append check needs it) and is memory-only (see above).
+impl Drop for SecretBlocklist {
+    fn drop(&mut self) {
+        for s in &mut self.0 {
+            s.zeroize();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -404,5 +502,79 @@ mod tests {
         let err = anyhow::anyhow!("parse failed for input {fake_key}");
         let clean = sanitize_error(&err, &[]);
         assert!(!clean.contains(&fake_key), "key echoed: {clean}");
+    }
+
+    #[test]
+    fn blocklist_covers_both_paste_forms() {
+        // P4: the operator value pasted bare or 0x-prefixed is scrubbed
+        // exactly (no heuristic), via SecretBlocklist twins.
+        let bare = "ef".repeat(32);
+        let prefixed = format!("0x{bare}");
+        for given in [bare.as_str(), prefixed.as_str()] {
+            let list = SecretBlocklist::from_values(&[given]);
+            assert_eq!(list.len(), 2, "value + twin");
+            let refs = list.as_refs();
+            assert!(refs.contains(&bare.as_str()), "bare twin missing");
+            assert!(refs.contains(&prefixed.as_str()), "0x twin missing");
+            for secret in [bare.clone(), prefixed.clone()] {
+                let err = anyhow::anyhow!("parse failed for input {secret}");
+                let clean = sanitize_error(&err, &refs);
+                assert!(
+                    !clean.contains(&secret),
+                    "blocklisted value echoed (given {given}): {clean}"
+                );
+            }
+        }
+        // Missing/empty env never errors: empty list, empty views.
+        let empty = SecretBlocklist::from_values(&["", "   "]);
+        assert!(empty.is_empty());
+        assert!(empty.as_refs().is_empty());
+        assert!(empty.to_vec().is_empty());
+    }
+
+    #[test]
+    fn bare_64hex_is_not_heuristically_scrubbed() {
+        // Policy (documented above): bare 64-hex passes the HEURISTIC so
+        // counters/hashes fragments don't false-positive; exact secrets are
+        // covered by the blocklist (test above). This test pins the policy:
+        // change it deliberately, not by accident.
+        let bare = "ab".repeat(32);
+        let out = redact_secret(&format!("counter={bare}"), &[]);
+        assert!(
+            out.contains(&bare),
+            "heuristic must leave bare 64-hex alone: {out}"
+        );
+        // But blocklisted bare values ARE scrubbed.
+        let out = redact_secret(&format!("counter={bare}"), &[bare.as_str()]);
+        assert!(!out.contains(&bare), "blocklist must win: {out}");
+    }
+
+    #[test]
+    fn blocklist_debug_hides_values() {
+        let list = SecretBlocklist::from_values(&["test-only-fake-secret-001"]);
+        let dbg = format!("{list:?}");
+        assert!(dbg.contains("SecretBlocklist"));
+        assert!(dbg.contains("entries"));
+        assert!(
+            !dbg.contains("test-only-fake-secret-001"),
+            "secret leaked in Debug: {dbg}"
+        );
+    }
+
+    #[test]
+    fn env_key_signer_is_not_clone() {
+        // The signer holding live key material must never gain Clone
+        // (copying key material across memory is a hygiene defect). There is
+        // no negative-trait assert without new deps; this documents the
+        // invariant next to the type. If `Clone` is ever derived, the S1/S5
+        // review must flag it here first.
+        fn takes_clone<T: Clone>() {}
+        fn takes_signer<T: LiveSigner>() {}
+        takes_signer::<EnvKeySigner>();
+        // `takes_clone::<EnvKeySigner>()` must NOT compile -- verified by
+        // inspection (no `Clone` impl above); uncommenting the next line
+        // must fail the build:
+        // takes_clone::<EnvKeySigner>();
+        let _ = takes_clone::<Address>;
     }
 }

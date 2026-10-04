@@ -149,3 +149,101 @@ fn ledger_verify_roundtrip_on_temp_dir() {
     assert_eq!(base_flash_arb::live::ledger::verify_ledger_dir(&dir), Ok(1));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn p4_submit_book_reconcile_evidenced_offline() {
+    // P4 call-site wiring, all offline: a fresh L5 approval (constructed
+    // here with the same shape `pipeline::run_presubmit` returns; the
+    // pipeline unit tests cover producing one) flows submit -> receipt
+    // booking -> reconcile -> evidence, and every refusal (kill, breaker,
+    // under-depth receipt, reconcile mismatch) fails closed with no partial
+    // state. No network, no keys, no broadcast.
+    use alloy::primitives::U256;
+    use base_flash_arb::evidence::{EvidenceSummary, write_evidence};
+    use base_flash_arb::live::breaker::Breaker;
+    use base_flash_arb::live::pipeline::ApprovedIntent;
+    use base_flash_arb::live::sender::{TxState, book_receipt, reconcile_and_trip};
+
+    let exec = OnchainExecutor {
+        executor: base_flash_arb::config::addresses::BALANCER_VAULT,
+        chain_id: 84532,
+    };
+    let fresh_intent = || ApprovedIntent {
+        size: U256::from(5_000_000u64),
+        net: U256::from(1_000_000u64),
+        gas_limit: 300_000,
+        ledger_seq: 11,
+    };
+    let ok: Result<(), BreakerError> = Ok(());
+
+    // Happy path: submit binds the nonce, a confirmed-at-depth receipt
+    // books, per-tx reconcile passes, and the arming evidence honors the
+    // honesty gates (window ordered, no realized presented).
+    let dir = std::env::temp_dir().join("aero-live-l10-p4-happy");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut nonces = NonceManager::new(3);
+    let mut breaker = Breaker::load(&dir, "test").expect("fresh");
+    let pending = exec
+        .submit(fresh_intent(), false, &ok, &mut nonces)
+        .expect("submit binds");
+    assert_eq!(pending.nonce, 3);
+    assert_eq!(pending.ledger_seq, 11);
+    let booked =
+        book_receipt(&pending, TxState::Confirmed { confirmations: 1 }, 1).expect("at-depth books");
+    assert_eq!(booked.ledger_seq, 11);
+    assert!(reconcile_and_trip(&mut breaker, 1_000_000, 1_000_000, 0).is_ok());
+    assert!(breaker.check().is_ok());
+    let ev_dir = dir.join("evidence");
+    let summary = EvidenceSummary::live_arming(84532, Some("head".to_string()), 1_700_000_000);
+    write_evidence(&ev_dir, &summary).expect("honest evidence emits");
+    let back: EvidenceSummary = serde_json::from_str(
+        &std::fs::read_to_string(ev_dir.join("summary.json")).expect("summary written"),
+    )
+    .expect("auditor-consumable JSON");
+    assert_eq!(back.ledger_head, Some("head".to_string()));
+    assert_eq!(back.realized_samples, 0);
+    assert!(back.window_end >= back.window_start);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Refusal path: kill-engaged submit takes no nonce.
+    let mut nonces = NonceManager::new(5);
+    assert!(exec.submit(fresh_intent(), true, &ok, &mut nonces).is_err());
+    assert_eq!(nonces.in_flight(), None);
+
+    // Refusal path: tripped breaker refuses submit AND reconcile mismatch
+    // trips a fresh breaker with the TripReason returned.
+    let dir = std::env::temp_dir().join("aero-live-l10-p4-refuse");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut breaker = Breaker::load(&dir, "test").expect("fresh");
+    breaker
+        .trip(TripReason::ConsecutiveFailures)
+        .expect("trips");
+    let tripped: Result<(), BreakerError> = breaker.check();
+    let mut nonces = NonceManager::new(5);
+    assert!(
+        exec.submit(fresh_intent(), false, &tripped, &mut nonces)
+            .is_err()
+    );
+    assert_eq!(nonces.in_flight(), None, "no nonce on breaker refusal");
+
+    // Refusal path: under-depth receipt never books (reorg safety), and a
+    // reconcile mismatch returns the TripReason while tripping.
+    let dir2 = std::env::temp_dir().join("aero-live-l10-p4-reconcile");
+    let _ = std::fs::remove_dir_all(&dir2);
+    let mut breaker2 = Breaker::load(&dir2, "test").expect("fresh");
+    let pending = exec
+        .submit(fresh_intent(), false, &ok, &mut NonceManager::new(0))
+        .expect("binds");
+    assert!(book_receipt(&pending, TxState::Submitted, 1).is_err());
+    assert!(
+        book_receipt(&pending, TxState::Confirmed { confirmations: 1 }, 5).is_err(),
+        "under-depth refuses"
+    );
+    assert_eq!(
+        reconcile_and_trip(&mut breaker2, 100, 200, 10),
+        Err(TripReason::ReconcileMismatch)
+    );
+    assert!(breaker2.check().is_err(), "mismatch trips");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
+}

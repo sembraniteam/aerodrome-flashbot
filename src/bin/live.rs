@@ -5,10 +5,17 @@
 //! - Strict startup order: L1 lock -> role read-back (L4) -> float-cap
 //!   check -> signer construction LAST. No key or KMS handle exists before
 //!   L1 passes.
-//! - P3 scope: lock + read-only verification + `--emit-evidence` +
-//!   `ledger verify`. The trading loop (L5-driven submission) lands in P4;
-//!   a successful P3 start prints ARMED and exits (no trades).
-//! - The operator NEVER runs this without a drill runbook (P4). Real keys,
+//! - P4 scope: lock + read-only verification + `--emit-evidence` +
+//!   `ledger verify` + the OFFLINE submit/booking/reconcile state machine
+//!   (`sender::submit` consumes an `ApprovedIntent`; `book_receipt` gates on
+//!   `bookable()`; `reconcile_and_trip` trips on mismatch). No trading loop
+//!   and no broadcast yet: a successful start prints ARMED and exits. The
+//!   P4 runbooks execute drills by hand; hashes come back as evidence.
+//! - Secrets: the operator value enters memory only post-lock (ledger
+//!   append-boundary blocklist) or on the failure path (error-funnel
+//!   sanitizer), via [`SecretBlocklist`] (both paste forms, zeroized on
+//!   drop). Errors leaving this binary never carry key material. The
+//!   operator NEVER runs this without a drill runbook. Real keys,
 //!   deployments, funding, and broadcasts are human steps from runbooks.
 
 use alloy::providers::{Provider, ProviderBuilder};
@@ -22,7 +29,7 @@ use base_flash_arb::live::{
     manifest::{ReadinessManifest, sha256_hex},
     profile::LiveProfile,
     roles::{RoleMatrix, read_roles},
-    signer::{EnvKeySigner, LiveSigner, SignerError, SignerKind},
+    signer::{EnvKeySigner, LiveSigner, SecretBlocklist, SignerError, SignerKind, sanitize_error},
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -78,10 +85,24 @@ async fn main() -> anyhow::Result<()> {
     if let Some(Command::LedgerVerify { ledger_dir }) = args.cmd {
         return cmd_ledger_verify(&ledger_dir);
     }
-    run_startup(&args).await
+    // Single error funnel (P4): every startup failure leaves through
+    // `sanitize_error` with the operator blocklist, so key material pasted
+    // into the environment can never echo into logs, metrics, or the
+    // returned error (which the shell may print). The blocklist is built
+    // ONLY on the failure path (sanitizer-only, zeroized on drop):
+    // pre-lock code never reads key material, so pre-lock errors cannot
+    // carry it -- the funnel is belt-and-braces for post-lock signer
+    // errors. Ledger/breaker errors name fields/paths only by construction
+    // (see `live::ledger`).
+    run_startup(&args).await.map_err(|e| {
+        let op_secrets = SecretBlocklist::from_process_env();
+        let secret_refs: Vec<&str> = op_secrets.as_refs();
+        anyhow::anyhow!("{}", sanitize_error(&e, &secret_refs))
+    })
 }
 
 fn cmd_ledger_verify(ledger_dir: &std::path::Path) -> anyhow::Result<()> {
+    // Read-only flow: nothing is appended, so no blocklist is needed.
     let ledger = Ledger::open(ledger_dir, Vec::new())?;
     match ledger.verify() {
         Ok(n) => {
@@ -99,6 +120,7 @@ fn cmd_ledger_verify(ledger_dir: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn run_startup(args: &Args) -> anyhow::Result<()> {
+    let window_start = evidence::now_utc_secs();
     let profile = LiveProfile::load(&args.config)?;
     tracing::info!(
         chain = profile.base.chain_id,
@@ -161,7 +183,8 @@ async fn run_startup(args: &Args) -> anyhow::Result<()> {
         &mut probe,
         || {
             // Signer construction: LAST. Sepolia loads the operator key
-            // from the environment; mainnet refuses until P4 wires KMS.
+            // from the environment; mainnet refuses without a KMS handle
+            // (USER-ACTION, P5; env keys never touch mainnet).
             match signer_kind {
                 SignerKind::Env => {
                     let signer = EnvKeySigner::from_env(profile.base.chain_id)?;
@@ -190,7 +213,16 @@ async fn run_startup(args: &Args) -> anyhow::Result<()> {
     }
 
     // Ledger: record the arming as an operator action (L8), then report.
-    let mut ledger = Ledger::open(&profile.live_section.ledger_dir, Vec::new())?;
+    // The operator blocklist guards the append boundary: any body field
+    // containing the operator value (either paste form) is refused naming
+    // the field only (see `live::ledger` + `signer::SecretBlocklist`).
+    // Built HERE -- after the lock sequence (L1 -> roles -> float ->
+    // signer-last) plus the kill-switch and breaker checks all passed --
+    // so no key material enters memory for redaction before L1 passes
+    // (the only earlier reader is the signer constructor itself, last in
+    // the sequence, which owns its buffers and zeroizes them).
+    let op_secrets = SecretBlocklist::from_process_env();
+    let mut ledger = Ledger::open(&profile.live_section.ledger_dir, op_secrets.to_vec())?;
     ledger.append(
         base_flash_arb::live::ledger::LedgerKind::OperatorAction,
         serde_json::json!({
@@ -201,7 +233,7 @@ async fn run_startup(args: &Args) -> anyhow::Result<()> {
     )?;
     tracing::info!(head = %ledger.head_hash(), "ledger armed event persisted");
     println!(
-        "ARMED chain={} stage_required={} manifest={} ledger_head={} (P3: no trading loop; P4 runbooks execute)",
+        "ARMED chain={} stage_required={} manifest={} ledger_head={} (no trading loop; runbooks execute)",
         profile.base.chain_id,
         profile.live_section.stage_required,
         sha256_hex(&manifest_bytes),
@@ -209,24 +241,11 @@ async fn run_startup(args: &Args) -> anyhow::Result<()> {
     );
 
     if let Some(dir) = args.emit_evidence.as_ref() {
-        let summary = EvidenceSummary {
-            schema: evidence::EVIDENCE_SCHEMA,
-            binary: "live".to_string(),
-            commit: evidence::build_commit(),
-            chain_id: profile.base.chain_id,
-            written_at: evidence::now_utc_secs(),
-            opportunities_seen: 0,
-            attempts_simulated: 0,
-            attempts_won: 0,
-            rejections: Default::default(),
-            predicted_net_sum: 0,
-            predicted_samples: 0,
-            realized_net_sum: 0,
-            realized_samples: 0,
-            breaker_events: Vec::new(),
-            ledger_head: Some(ledger.head_hash().to_string()),
-            note: "live arming only (P3): no opportunities evaluated, no realized fills (realized_samples=0)".to_string(),
-        };
+        let summary = EvidenceSummary::live_arming(
+            profile.base.chain_id,
+            Some(ledger.head_hash().to_string()),
+            window_start,
+        );
         let path = evidence::write_evidence(dir, &summary)?;
         tracing::info!(evidence = %path.display(), "evidence summary written");
     }

@@ -6,9 +6,15 @@
 //! L1 lock -> role read-back ([`roles`]) -> float-cap check
 //! ([`float_cap`]) -> [`signer`] construction last.
 //!
+//! P4 wires the post-lock call sites without adding a trading loop or a
+//! broadcast: [`pipeline::run_presubmit`] yields a single-use
+//! [`pipeline::ApprovedIntent`]; [`sender::OnchainExecutor::submit`]
+//! consumes it (retry = fresh L5 run); [`sender::book_receipt`] gates
+//! receipt booking on [`sender::TxState::bookable`];
+//! [`sender::reconcile_and_trip`] trips the [`breaker`] on any mismatch.
 //! Every stage fails closed; every refusal and rejection has an offline test
 //! (L10). No network calls happen inside these modules' pure cores -- the
-//! `live` binary performs read-only RPC at the boundary (P4 wires writes).
+//! `live` binary performs read-only RPC at the boundary.
 
 pub mod breaker;
 pub mod float_cap;

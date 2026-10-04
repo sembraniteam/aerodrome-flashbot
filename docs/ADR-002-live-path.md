@@ -144,6 +144,28 @@ Raising a compiled `hard_max` or an on-chain limit is a code change + new FREEZE
 - **P3** (`@base-mev-engineer` + `@rust-engineer` → `@rust-analyst`, `@security-expert`): `live` feature + `src/bin/live.rs`, profiles, `Signer` trait + sender, L5 pipeline wiring, ledger + breaker + kill switch, `--emit-evidence`, full L10 suite; `cargo build --bins` without the feature must contain no signer/sender symbols.
 - **P4**: evidence emission wiring, `RUNBOOK_SEPOLIA.md` D1–D12 extension, `RUNBOOK_MAINNET_CANARY.md`, `READINESS.md`.
 - **P5**: `/evaluate` then `/readiness testnet`.
+> P4 implementation note (2026-10-04): P3 Info items closed without
+> loosening any default/cap/invariant — (a) the live binary funnels every
+> startup error through `sanitize_error` with the operator
+> `SecretBlocklist` (single boundary in `src/bin/live.rs`; test-enforced
+> twins cover both paste forms); (b) production `Ledger::open` takes that
+> blocklist, the append boundary refuses blocklisted values naming the
+> field only, and `Ledger`'s `Debug` is count-only (no blocklist leak);
+> (c) bare-64hex stays heuristic-exempt by documented policy (exact
+> blocklist is the enforced mechanism); `EnvKeySigner` stays non-`Clone`
+> with zeroized decode buffers on every path (full `ZeroizeOnDrop` of the
+> upstream credential deferred: mainnet uses the keyless `RemoteSigner`).
+> Post-lock call sites wired with no new live execution: `submit` consumes
+> `ApprovedIntent` by move (retry = fresh L5 run), `book_receipt` gates on
+> `bookable()`, `reconcile_and_trip` trips the breaker and returns the
+> `TripReason` (per-tx + daily call sites, one helper). Evidence is schema
+> 2 (`window_start`/`window_end`, ordered-window + stale-schema gates,
+> `live_arming` constructor; schema-1 files still parse, never re-emit).
+> Live binary still refuses without the full arm and performs no broadcast.
+> Runbooks are user-run (D1–D12 + canary); `docs/FREEZE.md` untouched (no
+> contract change). USER-ACTION placeholders: real Sepolia addresses (drill
+> profile copy), KMS handle (mainnet remote signer), oracle feed replacing
+> the `--eth-price` attestation (P5).
 
 ## Consequences
 

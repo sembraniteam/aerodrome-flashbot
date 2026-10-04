@@ -95,7 +95,12 @@ pub fn record_hash(prev_hash: &str, kind: LedgerKind, body: &Value, commit: &str
 }
 
 /// Append-only JSONL ledger.
-#[derive(Debug)]
+///
+/// `blocklist` holds exact secret values that must never be written (the
+/// live binary passes [`super::signer::SecretBlocklist`] built from
+/// `OPERATOR_KEY`; tests pass fixture secrets). The list itself is secret:
+/// [`Debug`](std::fmt::Debug) is manual and prints the entry COUNT only,
+/// and a refused append names the FIELD only, never the value.
 pub struct Ledger {
     path: PathBuf,
     blocklist: Vec<String>,
@@ -103,11 +108,25 @@ pub struct Ledger {
     next_seq: u64,
 }
 
+impl std::fmt::Debug for Ledger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ledger")
+            .field("path", &self.path)
+            .field("blocklist_entries", &self.blocklist.len())
+            .field("head_hash", &self.head_hash)
+            .field("next_seq", &self.next_seq)
+            .finish()
+    }
+}
+
 impl Ledger {
     /// Open (or create) the ledger at `ledger_dir/ledger.jsonl`. Resumes the
     /// chain from existing records so restarts extend, never fork, history.
-    /// `blocklist` holds exact secret values that must never be written
-    /// (test/fixture secrets; production code never holds real ones).
+    /// `blocklist` holds exact secret values that must never be written:
+    /// production passes the operator [`super::signer::SecretBlocklist`]
+    /// (both paste forms); the append boundary refuses any body whose string
+    /// field contains one, naming the field only. Read-only `verify` flows
+    /// pass an empty list (nothing is written).
     pub fn open(ledger_dir: &Path, blocklist: Vec<String>) -> Result<Self, LedgerError> {
         std::fs::create_dir_all(ledger_dir).map_err(|e| LedgerError::Io(e.to_string()))?;
         let path = ledger_dir.join("ledger.jsonl");
@@ -304,6 +323,35 @@ mod tests {
             .is_ok()
         );
         assert_eq!(l.len(), 1, "refused records must not advance the chain");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn production_blocklist_refuses_operator_key_shaped_value() {
+        // P4 append boundary: the production blocklist (operator key in both
+        // paste forms, as `SecretBlocklist::from_values` builds it) refuses
+        // the write even though the VALUE is tx-hash-shaped (0x + 64 hex),
+        // which non-blocklisted receipts must still allow (see
+        // `appends_chain_and_verifies`: tx hashes are data, not secrets --
+        // the blocklist is what distinguishes them).
+        use super::super::signer::SecretBlocklist;
+        let raw_key = "be".repeat(32);
+        let blocklist = SecretBlocklist::from_values(&[raw_key.as_str()]);
+        let dir = tmpdir("aero-ledger-test-operator-boundary");
+        let mut l = Ledger::open(&dir, blocklist.to_vec()).expect("opens");
+        let leaked = format!("0x{raw_key}");
+        assert_eq!(
+            l.append(LedgerKind::Intent, json!({"note": leaked})),
+            Err(LedgerError::BlocklistedValue("note".to_string()))
+        );
+        // Refusal names the field only, never the value.
+        let err = format!("{}", LedgerError::BlocklistedValue("note".to_string()));
+        assert!(!err.contains(&raw_key), "value echoed in error: {err}");
+        assert_eq!(l.len(), 0, "refused records must not advance the chain");
+        // Ledger Debug never carries the blocklisted value.
+        let dbg = format!("{l:?}");
+        assert!(!dbg.contains(&raw_key), "secret leaked in Debug: {dbg}");
+        assert!(dbg.contains("blocklist_entries"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

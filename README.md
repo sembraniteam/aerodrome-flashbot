@@ -3,10 +3,17 @@
 Flash-loan arb on Base (8453): Aerodrome Slipstream vs Uniswap V3 via Balancer V2 Vault (0% fee on Base). Dry-run only —
 no private key, signing, or broadcast. Stack: Rust `alloy`, Foundry, Discord pause-only.
 
-> Live execution path exists behind a triple lock (P3, ADR-002) but performs no trades: the `live` binary
-> (`--features live`) verifies the L1 lock, role read-back, float cap, ledger, and evidence emission, then exits.
-> The trading loop lands in P4 with numbered runbooks. Dry-run stays the default everywhere; the paper binary
-> still forces `dry_run=true`.
+> Live execution path, triple-locked (P4, ADR-002): the `live` binary
+> (`--features live`) verifies the L1 lock, role read-back, float cap,
+> ledger (operator-blocklisted append boundary), and evidence emission
+> (schema 2, window + honesty gates), then exits. The post-lock state
+> machine is wired and offline-tested — `submit` consumes a single-use
+> `ApprovedIntent` (retry = fresh L5 run), receipts book only via
+> `bookable()`, `reconcile_and_trip` trips the breaker on any mismatch —
+> but there is STILL no trading loop and no broadcast: drills run by hand
+> from `docs/RUNBOOK_SEPOLIA.md` (D1–D12) and
+> `docs/RUNBOOK_MAINNET_CANARY.md`. Dry-run stays the default everywhere;
+> the paper binary still forces `dry_run=true`.
 
 ## Features
 
@@ -119,9 +126,9 @@ print `SKIPPED` offline.
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
 | `src/main.rs`                    | `paper` binary (dry-run harness, forces `dry_run=true`)                                                        |
 | `src/bin/discord-bot.rs`         | `discord-bot` binary (ops CLI)                                                                                 |
-| `src/bin/live.rs`                | `live` binary (triple-locked; P3 arms/verifies only, no trading loop)                                          |
+| `src/bin/live.rs`                | `live` binary (triple-locked; arms/verifies only, no trading loop)                                          |
 | `src/live/`                      | live path (`live` feature only): lock, profiles, signer, pipeline, sender, breaker, ledger                      |
-| `src/evidence.rs`                | keyless `--emit-evidence` summaries (both binaries; predicted never presented as realized)                     |
+| `src/evidence.rs`                | keyless `--emit-evidence` summaries (both binaries; schema 2 adds window; predicted never presented as realized) |
 | `config/sepolia.toml`            | Base Sepolia profile (84532, dust, `[live]` section)                                                           |
 | `config/mainnet-canary.toml`     | Base mainnet canary profile (8453, G5 caps, `[live]` section)                                                   |
 | `src/lib.rs`                     | lib shared by both binaries                                                                                                    |
@@ -134,8 +141,8 @@ print `SKIPPED` offline.
 ## Docs
 
 - `docs/FREEZE.md` — Base mainnet addresses/selectors/codehashes + `forge build --sizes`
-- `docs/RUNBOOK_SEPOLIA.md` — pause→sweep→redeploy drill on Base Sepolia
-- `docs/RUNBOOK_MAINNET_CANARY.md` — canary stub (full runbook lands in P4)
+- `docs/RUNBOOK_SEPOLIA.md` — D1–D12 drill on Base Sepolia (user-run, onchain.json evidence)
+- `docs/RUNBOOK_MAINNET_CANARY.md` — G5 canary runbook (user-run: caps, window, drills, rollback)
 - `docs/ADR-001-immutable-monolith.md` — immutable monolith, UR explicit-selector-only, USDC-only
 - `docs/ADR-002-live-path.md` — live-path design + P3 implementation note
 - `docs/DISCORD_SETUP.md` — Discord control-plane setup
