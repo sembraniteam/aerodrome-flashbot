@@ -1,0 +1,98 @@
+# Live chain profile: Base Sepolia (chain id 84532). P3 (ADR-002).
+#
+# DUST DRILL ONLY. No live run happens in P3: this file exists so the L1/L2
+# lock, role read-back, and offline L10 suite have a real profile to load.
+# Placeholders below (repeating digits) are NOT deployed contracts: the P4
+# runbook replaces each with the verified Sepolia address at deploy time, and
+# startup refuses until the on-chain read-back matches (L4).
+#
+# NEVER commit real RPC URLs with API keys here. `dry_run` stays true on
+# disk: the live binary is armed only through the L1 lock, never by config.
+
+dry_run = true
+chain_id = 84532
+rpc_ws_url = "ws://127.0.0.1:8545"
+# Post-Denim default. Re-verify against docs.base.org before relying on it.
+feed_mode = "canonical"
+head_staleness_blocks = 5
+
+# USDC base units (6 decimals). G3 drill dust: $5 max flash, $0.10 min net,
+# $1 daily loss cap, 3 consecutive failures (ADR-002 §11).
+max_flash_usdc = 5000000
+min_net_profit_usdc = 100000
+max_slippage_bps = 50
+daily_loss_cap_usdc = 1000000
+max_consecutive_failures = 3
+deadline_secs = 30
+max_in_flight = 1
+
+[[pairs]]
+name = "WETH-test/USDC-test"
+token_a = "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+token_b = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+decimals_a = 18
+decimals_b = 6
+enabled = true
+
+[[pairs]]
+name = "AERO-test/USDC-test"
+token_a = "0xABABABABABABABABABABABABABABABABABABABAB"
+token_b = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+decimals_a = 18
+decimals_b = 6
+enabled = true
+
+[[pairs]]
+name = "AERO-test/WETH-test"
+token_a = "0xABABABABABABABABABABABABABABABABABABABAB"
+token_b = "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+decimals_a = 18
+decimals_b = 18
+# Non-USDC-quoted: estimator accuracy only, never execution sizing.
+enabled = true
+
+[[pairs]]
+name = "cbETH/ETH-DISABLED"
+token_a = "0x0000000000000000000000000000000000000000"
+token_b = "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+decimals_a = 18
+decimals_b = 18
+enabled = false
+
+[live]
+enabled = true
+stage_required = "G3"
+# All 0x55../0x66.. placeholders: replaced at Sepolia deploy (P4 runbook).
+executor = "0x5555555555555555555555555555555555555555"
+owner = "0x6666666666666666666666666666666666666666"
+operator = "0x7777777777777777777777777777777777777777"
+pauser = "0x8888888888888888888888888888888888888888"
+# Expected on-chain maxFlashUSDC after the drill `setMaxFlashUSDC` dust cap.
+# Re-verified (and updated here) at deploy time; mismatch refuses startup.
+onchain_max_flash_usdc = 5000000
+vault = "0x9999999999999999999999999999999999999999"
+routers = [
+  "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+]
+tokens = [
+  "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+  "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+  "0xABABABABABABABABABABABABABABABABABABABAB",
+]
+quoters = [
+  "0xEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+  "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+]
+# No Chainlink sequencer feed is published for Sepolia: zero = unconfigured,
+# and the gate fails closed until a verified feed lands (see src/sequencer.rs).
+sequencer_feed = "0x0000000000000000000000000000000000000000"
+hard_max_flash_usdc = 5000000
+hard_daily_loss_cap_usdc = 1000000
+hard_max_consecutive_failures = 3
+# Gas dust, USD-equivalent (Sepolia ETH is valueless; conversion is
+# fail-closed and the cap still binds).
+operator_float_cap_usdc = 5000000
+confirmation_depth = 1
+kill_switch_file = "artifacts/live-sepolia.kill"
+ledger_dir = "artifacts/ledger-sepolia"

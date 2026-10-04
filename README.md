@@ -3,7 +3,10 @@
 Flash-loan arb on Base (8453): Aerodrome Slipstream vs Uniswap V3 via Balancer V2 Vault (0% fee on Base). Dry-run only —
 no private key, signing, or broadcast. Stack: Rust `alloy`, Foundry, Discord pause-only.
 
-> Live execution does not exist. Adding it needs explicit flag + separate review.
+> Live execution path exists behind a triple lock (P3, ADR-002) but performs no trades: the `live` binary
+> (`--features live`) verifies the L1 lock, role read-back, float cap, ledger, and evidence emission, then exits.
+> The trading loop lands in P4 with numbered runbooks. Dry-run stays the default everywhere; the paper binary
+> still forces `dry_run=true`.
 
 ## Features
 
@@ -58,6 +61,21 @@ FORK_URL=http://127.0.0.1:8545 cargo run -- --fork-check --tolerance-bps 50
 FORK_URL=https://mainnet.base.org cargo run -- --fork-matrix
 ```
 
+Live path (P3: lock + verify only, no trades, no keys touched without a runbook):
+
+```bash
+cargo build --bins --features live
+./target/debug/live --help
+./target/debug/live ledger-verify --ledger-dir artifacts/ledger-sepolia
+./target/debug/live --config config/sepolia.toml  # refuses without --manifest (L1 lock)
+```
+
+Evidence (predicted-only from paper; auditor input, never realized):
+
+```bash
+cargo run -- --emit-evidence /tmp/aero-evidence --csv results.csv
+```
+
 ## Configuration
 
 `config/default.toml` (testnet-safe):
@@ -99,8 +117,13 @@ print `SKIPPED` offline.
 
 | Path                             | Contents                                                                                                                       |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
-| `src/main.rs`                    | `base-flash-arb` binary (paper harness)                                                                                        |
-| `src/bin/discord-bot.rs`         | `discord-bot` binary (ops CLI)                                                                                                 |
+| `src/main.rs`                    | `paper` binary (dry-run harness, forces `dry_run=true`)                                                        |
+| `src/bin/discord-bot.rs`         | `discord-bot` binary (ops CLI)                                                                                 |
+| `src/bin/live.rs`                | `live` binary (triple-locked; P3 arms/verifies only, no trading loop)                                          |
+| `src/live/`                      | live path (`live` feature only): lock, profiles, signer, pipeline, sender, breaker, ledger                      |
+| `src/evidence.rs`                | keyless `--emit-evidence` summaries (both binaries; predicted never presented as realized)                     |
+| `config/sepolia.toml`            | Base Sepolia profile (84532, dust, `[live]` section)                                                           |
+| `config/mainnet-canary.toml`     | Base mainnet canary profile (8453, G5 caps, `[live]` section)                                                   |
 | `src/lib.rs`                     | lib shared by both binaries                                                                                                    |
 | `contracts/FlashArbExecutor.sol` | atomic executor                                                                                                                |
 | `test/`                          | Forge tests + `mocks/` + `TestBase.sol` (minimal Vm, no `forge-std`)                                                           |
@@ -112,5 +135,7 @@ print `SKIPPED` offline.
 
 - `docs/FREEZE.md` — Base mainnet addresses/selectors/codehashes + `forge build --sizes`
 - `docs/RUNBOOK_SEPOLIA.md` — pause→sweep→redeploy drill on Base Sepolia
+- `docs/RUNBOOK_MAINNET_CANARY.md` — canary stub (full runbook lands in P4)
 - `docs/ADR-001-immutable-monolith.md` — immutable monolith, UR explicit-selector-only, USDC-only
+- `docs/ADR-002-live-path.md` — live-path design + P3 implementation note
 - `docs/DISCORD_SETUP.md` — Discord control-plane setup

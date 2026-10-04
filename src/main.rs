@@ -4,8 +4,8 @@
 //! - Best-effort WS probe (redacted logs only), then evaluates the
 //!   allowlisted pairs with the off-chain estimator over a deterministic
 //!   fixture skew, gates every candidate through
-//!   [`base_flash_arb::risk`], verifies via
-//!   [`base_flash_arb::sim`], and logs metrics to stdout + CSV.
+//!   [`risk`], verifies via
+//!   [`sim`], and logs metrics to stdout + CSV.
 //! - Fork mode: run `anvil --fork-url <PUBLIC_BASE_RPC>` first, then point
 //!   `--config` at a TOML whose `rpc_ws_url` is the local anvil WS endpoint.
 //!   See README "Fork test" section. No key is required for `eth_call` reads.
@@ -74,6 +74,10 @@ struct Args {
     /// any network call inside the paper binary.
     #[arg(long)]
     l1_fee: Option<u64>,
+    /// Write a run-summary JSON into <dir> after the run (auditor input;
+    /// predicted-only, never realized; see `src/evidence.rs`).
+    #[arg(long)]
+    emit_evidence: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -119,11 +123,7 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
     // PAPER MODE: force dry-run regardless of file content, loudly. The clone
     // makes the override an assignment (not just a log line): everything
     // below reads the effective config with `dry_run == true`.
-    let mut effective = cfg.clone();
-    if !effective.dry_run {
-        tracing::warn!("config dry_run=false ignored: paper binary forces dry-run");
-    }
-    effective.dry_run = true;
+    let effective = force_dry_run(cfg);
     let cfg = &effective;
     log_address_registry();
     // Discord alerts: opt-in only (--discord-alerts). URL comes solely from
@@ -223,6 +223,10 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
     );
     let min_net = U256::from(cfg.min_net_profit_usdc);
     let max_flash = U256::from(cfg.max_flash_usdc);
+    // Sum of paper predicted nets (one per winning simulation). Realized
+    // fills never exist in paper mode, so this feeds only the predicted
+    // side of `--emit-evidence` (L9 honesty).
+    let mut predicted_net_sum: i128 = 0;
 
     for pair in cfg.pairs.iter().filter(|p| p.enabled) {
         // Exercise the allowlist lookup helper too.
@@ -340,6 +344,9 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
                             "PAPER OPPORTUNITY (not submitted)"
                         );
                         metrics.record_simulated(true, false, 0, 0);
+                        predicted_net_sum = predicted_net_sum.saturating_add(
+                            net.try_into().map(|n: u64| n as i128).unwrap_or(i128::MAX),
+                        );
                         metrics.record_pair_sim(
                             &pair.name,
                             &dir_label,
@@ -429,7 +436,37 @@ async fn run_paper(args: &Args, cfg: &BotConfig) -> anyhow::Result<()> {
     // `Metrics::write_csv_breakdown`).
     metrics.write_csv_breakdown(&mut w)?;
     tracing::info!(csv = %args.csv.display(), "metrics written");
+    if let Some(dir) = args.emit_evidence.as_ref() {
+        // Auditor input: predicted-only paper summary (realized_samples = 0
+        // by construction; see `src/evidence.rs` honesty gate).
+        let mut rejections = std::collections::BTreeMap::new();
+        rejections.insert("risk".to_string(), metrics.rejected_by_risk);
+        rejections.insert("quote_diverged".to_string(), metrics.quotes_diverged);
+        let summary = base_flash_arb::evidence::EvidenceSummary::paper(
+            cfg.chain_id,
+            metrics.opportunities_seen,
+            metrics.attempts_simulated,
+            metrics.attempts_won,
+            rejections,
+            predicted_net_sum,
+            metrics.attempts_won,
+        );
+        let path = base_flash_arb::evidence::write_evidence(dir, &summary)?;
+        tracing::info!(evidence = %path.display(), "evidence summary written (predicted-only)");
+    }
     Ok(())
+}
+
+/// PAPER MODE helper: force dry-run regardless of file content, loudly.
+/// Pure assignment (not just a log line): everything downstream reads the
+/// returned config with `dry_run == true` (S2).
+fn force_dry_run(cfg: &BotConfig) -> BotConfig {
+    let mut effective = cfg.clone();
+    if !effective.dry_run {
+        tracing::warn!("config dry_run=false ignored: paper binary forces dry-run");
+    }
+    effective.dry_run = true;
+    effective
 }
 
 /// Deterministic fixture head used when the live feed yields nothing
@@ -608,6 +645,7 @@ mod tests {
             fork_matrix: false,
             discord_alerts: false,
             l1_fee: None,
+            emit_evidence: None,
         };
         run_paper(&args, &cfg).await.expect("paper run succeeds");
         let body = std::fs::read_to_string(&csv).expect("csv written");
@@ -645,6 +683,70 @@ mod tests {
             base.sqrt_price_x96.saturating_mul(U256::from(102u64)) / U256::from(100u64)
         );
         assert!(skewed.sqrt_price_x96 > base.sqrt_price_x96);
+    }
+
+    #[test]
+    fn forces_dry_run_when_config_says_false() {
+        // L10: paper still forces dry-run with `dry_run = false` on disk.
+        let mut cfg =
+            BotConfig::load(&PathBuf::from("config/default.toml")).expect("default config");
+        assert!(cfg.dry_run, "default fixture must start dry-run");
+        cfg.dry_run = false;
+        let effective = force_dry_run(&cfg);
+        assert!(
+            effective.dry_run,
+            "paper must force dry_run=true by assignment"
+        );
+        // The source config is untouched; only the effective copy is forced.
+        assert!(!cfg.dry_run);
+    }
+
+    #[test]
+    fn emit_evidence_flag_parses() {
+        // L9: both binaries accept `--emit-evidence <dir>`.
+        let args = Args::try_parse_from(["paper", "--emit-evidence", "/tmp/aero-paper-evidence"])
+            .expect("flag parses");
+        assert_eq!(
+            args.emit_evidence,
+            Some(PathBuf::from("/tmp/aero-paper-evidence"))
+        );
+    }
+
+    #[tokio::test]
+    async fn emit_evidence_writes_predicted_only_summary() {
+        // L9/L10: paper evidence states sample sizes and never presents
+        // predicted numbers as realized.
+        let dir = std::env::temp_dir().join("aero-paper-evidence-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("tmpdir");
+        let csv = dir.join("results.csv");
+        let out = dir.join("evidence");
+        let cfg = BotConfig::load(&PathBuf::from("config/default.toml")).expect("default config");
+        let args = Args {
+            config: PathBuf::from("config/default.toml"),
+            csv,
+            fork_url: String::new(),
+            tolerance_bps: 50,
+            kill: false,
+            fork_check: false,
+            fork_matrix: false,
+            discord_alerts: false,
+            l1_fee: None,
+            emit_evidence: Some(out.clone()),
+        };
+        run_paper(&args, &cfg).await.expect("paper run succeeds");
+        let body = std::fs::read_to_string(out.join("summary.json")).expect("summary written");
+        let v: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+        assert_eq!(v["binary"], "paper");
+        assert_eq!(v["realized_samples"], 0);
+        assert_eq!(v["realized_net_sum"], 0);
+        assert!(
+            v["note"]
+                .as_str()
+                .unwrap_or("")
+                .contains("realized_samples=0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

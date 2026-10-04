@@ -5,6 +5,14 @@
 - Scope: off-chain live path (`src/live/`, `src/bin/live.rs`, `live` feature, chain profiles) and its on-chain seams
 - Builds to: `references/live-contract.md` (L1–L10); preserves S1–S10 with dry-run the default
 - Companion: ADR-001 (immutable monolith), `docs/FREEZE.md`, `docs/RUNBOOK_SEPOLIA.md`, promotion ladder (G0–G6), risk playbook
+- P3 implementation note (2026-10-04): the §1–§11 design is implemented as specified — `live` feature + `src/live/`
+  (gated `mod live`) + `src/bin/live.rs` (`required-features`), `config/sepolia.toml` + `config/mainnet-canary.toml`
+  (`[live]` per §2), L1 lock (build/config/arm/manifest, constant-time `LIVE_ARM`, strict load order with signer last),
+  L3 (`EnvKeySigner` Sepolia-only + `RemoteSigner` mainnet-only stub, trading custody guard, `redact_secret`/zeroize/
+  custom `Debug`), L4 role read-back, L5 pipeline wiring, L6 nonce sender + reconciliation, L7 breaker + kill switch,
+  L8 hash-chained JSONL ledger + `ledger verify`, L9 `--emit-evidence` on both binaries, full L10 offline suite
+  (`cargo test` 115 + `cargo test --features live` 171 green; `forge test` 71 green, contract untouched).
+  `docs/FREEZE.md` untouched (no contract change in P2, none in P3). Runbooks and the trading loop land in P4.
 
 ## Context
 

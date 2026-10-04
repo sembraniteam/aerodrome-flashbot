@@ -1,0 +1,100 @@
+# Live chain profile: Base mainnet canary (chain id 8453). P3 (ADR-002).
+#
+# G5 CANARY CAPS: $50 max flash, $10 daily loss cap, 2 consecutive failures,
+# operator float gas-only <= $20 equiv (ADR-002 §11). No live run happens in
+# P3: this file exists so the L1/L2 lock and offline L10 suite cover canary.
+#
+# Role/executor placeholders (0x11../0x22..) are NOT deployed contracts: the
+# P4 runbook replaces each with the verified canary address at deploy time,
+# and startup refuses until the on-chain read-back matches (L4). Mainnet
+# protocol addresses (Vault, routers, tokens, quoters, sequencer feed) are
+# the pinned production values from docs/FREEZE.md.
+#
+# NEVER commit real RPC URLs with API keys here. `dry_run` stays true on
+# disk: the live binary is armed only through the L1 lock, never by config.
+
+dry_run = true
+chain_id = 8453
+rpc_ws_url = "ws://127.0.0.1:8545"
+# Post-Denim default. Re-verify against docs.base.org before relying on it.
+feed_mode = "canonical"
+head_staleness_blocks = 5
+
+# USDC base units (6 decimals). G5 canary: $50 / $5 / $10 / 2 failures.
+max_flash_usdc = 50000000
+min_net_profit_usdc = 5000000
+max_slippage_bps = 50
+daily_loss_cap_usdc = 10000000
+max_consecutive_failures = 2
+deadline_secs = 30
+max_in_flight = 1
+
+[[pairs]]
+name = "WETH/USDC"
+token_a = "0x4200000000000000000000000000000000000006"
+token_b = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+decimals_a = 18
+decimals_b = 6
+enabled = true
+
+[[pairs]]
+name = "AERO/USDC"
+token_a = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+token_b = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+decimals_a = 18
+decimals_b = 6
+enabled = true
+
+[[pairs]]
+name = "AERO/WETH"
+token_a = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+token_b = "0x4200000000000000000000000000000000000006"
+decimals_a = 18
+decimals_b = 18
+# Non-USDC-quoted: estimator accuracy only, never execution sizing
+# (executor is USDC-flash-only).
+enabled = true
+
+[[pairs]]
+name = "cbETH/ETH-DISABLED"
+token_a = "0x0000000000000000000000000000000000000000"
+token_b = "0x4200000000000000000000000000000000000006"
+decimals_a = 18
+decimals_b = 18
+enabled = false
+
+[live]
+enabled = true
+stage_required = "G4"
+# 0x11../0x22.. placeholders: replaced at canary deploy (P4 runbook).
+executor = "0x1111111111111111111111111111111111111111"
+owner = "0x2222222222222222222222222222222222222222"
+operator = "0x3333333333333333333333333333333333333333"
+pauser = "0x4444444444444444444444444444444444444444"
+# Expected on-chain maxFlashUSDC after the canary `setMaxFlashUSDC` cap.
+# Constructor default is $5000 (5000000000); the canary deploy lowers it and
+# this value is updated in the same step. Mismatch refuses startup.
+onchain_max_flash_usdc = 5000000000
+vault = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
+routers = [
+  "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+  "0x2626664c2603336E57B271c5C0b26F421741e481",
+]
+tokens = [
+  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "0x4200000000000000000000000000000000000006",
+  "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+]
+quoters = [
+  "0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0",
+  "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
+]
+sequencer_feed = "0xBCF85224fc0756B9Fa45aA7892530B47e10b6433"
+hard_max_flash_usdc = 50000000
+hard_daily_loss_cap_usdc = 10000000
+hard_max_consecutive_failures = 2
+# Gas only, USD-equivalent. Conversion is fail-closed (Err/stale → refuse).
+operator_float_cap_usdc = 20000000
+confirmation_depth = 5
+kill_switch_file = "artifacts/live-canary.kill"
+ledger_dir = "artifacts/ledger-canary"

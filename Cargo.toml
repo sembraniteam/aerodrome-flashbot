@@ -13,6 +13,20 @@ authors = ["Ahmad Rifa'i <develop.rifai@gmail.com>"]
 name = "base_flash_arb"
 path = "src/lib.rs"
 
+[[bin]]
+name = "paper"
+path = "src/main.rs"
+
+[[bin]]
+name = "live"
+path = "src/bin/live.rs"
+required-features = ["live"]
+
+[features]
+# Live execution path (ADR-002). Off by default: the paper build contains no
+# signer/sender code. Only `src/live/` + `src/bin/live.rs` may use this.
+live = []
+
 [profile.release]
 opt-level = 3
 lto = true
@@ -33,4 +47,8 @@ anyhow = "1"
 thiserror = "2"
 csv = "1"
 serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+zeroize = "1"
+subtle = "2"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }

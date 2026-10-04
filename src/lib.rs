@@ -9,6 +9,7 @@ pub mod alerts;
 pub mod chain;
 pub mod config;
 pub mod discord;
+pub mod evidence;
 pub mod fork_check;
 pub mod metrics;
 pub mod pools;
@@ -16,3 +17,9 @@ pub mod profit;
 pub mod risk;
 pub mod sequencer;
 pub mod sim;
+
+// Live execution path (ADR-002): signer/sender/lock code lives ONLY here,
+// compiled only with `--features live`. The default (paper) build contains
+// no signer or sender symbols (S1/S1b).
+#[cfg(feature = "live")]
+pub mod live;
