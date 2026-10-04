@@ -50,23 +50,43 @@ echo "maxFlash (base units): $MAX_FLASH_USDC_BASE"
 echo "Faucet check (owner Sepolia ETH):"
 cast balance --rpc-url "$RPC" "$OWNER_ADDR"
 
+# Rapid-fire sends need explicit nonces: back-to-back txs sit pending in the
+# mempool, so a fresh "latest" lookup repeats an already-used nonce.
+# A file-backed counter survives command-substitution subshells.
+NONCE_FILE="$(mktemp)"
+trap 'rm -f "$NONCE_FILE"' EXIT
+cast nonce --rpc-url "$RPC" --block pending "$OWNER_ADDR" > "$NONCE_FILE"
+take_nonce() { local n; n=$(cat "$NONCE_FILE"); echo "$((n+1))" > "$NONCE_FILE"; echo "$n"; }
+
 echo "== 1. Build =="
 forge build
 
-deploy() { # $1 = create-args... ; prints deployed address
-  forge create "$@" --rpc-url "$RPC" --private-key "$DRILL_OWNER_KEY" --broadcast \
-    | grep -E "Deployed to:" | awk '{print $3}'
+deploy() { # $1 = contract id (path:Name); rest = constructor SIG + args (empty = no args)
+  # NOTE: forge create 1.8.4 ignores --rpc-url for an initial connection
+  # (tries localhost:8545, "MPP HTTP request" failure), while cast honors it.
+  # So deployment goes through `cast send --create` with the same RPC/key.
+  local id="$1"; shift
+  local code args tail
+  code=$(forge inspect "$id" bytecode)
+  if [ $# -eq 0 ]; then
+    tail=""
+  else
+    local sig="$1"; shift
+    tail=$(cast abi-encode "$sig" "$@" | sed 's/^0x//')
+  fi
+  cast send --rpc-url "$RPC" --private-key "$DRILL_OWNER_KEY" --nonce "$(take_nonce)" --create "${code}${tail}" \
+    | grep -E "contractAddress" | awk '{print $2}'
 }
 
 send() { # $1+ = cast send args (contract + sig + params)
-  cast send --rpc-url "$RPC" --private-key "$DRILL_OWNER_KEY" "$@" > /dev/null
+  cast send --rpc-url "$RPC" --private-key "$DRILL_OWNER_KEY" --nonce "$(take_nonce)" "$@" > /dev/null
   echo "  ok: $2"
 }
 
 echo "== 2. Deploy mock tokens =="
-MUSDC="$(deploy test/mocks/MockERC20.sol:MockERC20 --constructor-args "Mock USDC" "mUSDC" 6)"
+MUSDC="$(deploy test/mocks/MockERC20.sol:MockERC20 "constructor(string,string,uint8)" "Mock USDC" "mUSDC" 6)"
 echo "mUSDC: $MUSDC"
-MWETH="$(deploy test/mocks/MockERC20.sol:MockERC20 --constructor-args "Mock WETH" "mWETH" 18)"
+MWETH="$(deploy test/mocks/MockERC20.sol:MockERC20 "constructor(string,string,uint8)" "Mock WETH" "mWETH" 18)"
 echo "mWETH: $MWETH"
 
 echo "== 3. Deploy MockVault (0 bps) + MockRouter =="
@@ -85,7 +105,7 @@ send "$MWETH" "mint(address,uint256)" "$MROUTER" 1000000000000000000000
 send "$MUSDC" "mint(address,uint256)" "$MROUTER" 1000000000000
 
 echo "== 6. Deploy executor =="
-EXE="$(deploy contracts/FlashArbExecutor.sol:FlashArbExecutor --constructor-args "$MVAULT" "$MUSDC")"
+EXE="$(deploy contracts/FlashArbExecutor.sol:FlashArbExecutor "constructor(address,address)" "$MVAULT" "$MUSDC")"
 echo "Executor: $EXE"
 
 echo "== 7. Configure (RUNBOOK section 3, dust caps) =="
