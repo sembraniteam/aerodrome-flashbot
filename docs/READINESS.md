@@ -71,6 +71,22 @@ separately by the honest re-arm (`manifest-drill-v2.json` ready=G0
 attempt=G3, ARMED, `evidence-d11b`). Therefore D1–D12 hashes stand as
 G3 exit evidence without re-running the drill.
 
+## G4 pre-flight go-decision (2026-10-10)
+
+Commit `0e517fd`, bundle `artifacts/readiness/20261010T085110Z`
+(7 gates PASS, clean tree, chain-id 8453 scope; S6 carried as the
+known false positive). G1 shadow:
+`artifacts/readiness/mainnet-shadow/evidence/summary.json` (3 seen /
+3 risk-rejected, realized 0). FREEZE pins live on 8453 (vault,
+routers, tokens all return code). Alert: acked by Geek 10/10/2026
+(pauser reachable, abort path understood). Canary roles: owner
+`0xdb7d19794331132524f12cafD04601179A1F337b`, operator
+`0x8aD7Eea05E8Dd442730005Aa8915a17D279C1712`, pauser
+`0x3f2497e0c93FF4ACA76280C97b4457e13D32bBc7`; caps are the runbook
+G5 defaults ($50 max flash / $10 daily loss / 2 failures) unless the
+owner writes lower numbers before deploy. No capital moves and no
+deploy under this entry — the §2 deploy is a separate approval.
+
 ## G3 drill evidence carries across the lockfile refresh (2026-10-10)
 
 `git diff 0fcb7cb..f6b3963` touches only `Cargo.lock` (registry churn:
