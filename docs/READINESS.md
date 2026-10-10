@@ -70,3 +70,18 @@ user's `cast send`). The new binary path at the new commit is proven
 separately by the honest re-arm (`manifest-drill-v2.json` ready=G0
 attempt=G3, ARMED, `evidence-d11b`). Therefore D1–D12 hashes stand as
 G3 exit evidence without re-running the drill.
+
+## G3 drill evidence carries across the lockfile refresh (2026-10-10)
+
+`git diff 0fcb7cb..f6b3963` touches only `Cargo.lock` (registry churn:
+syn 3.0.6→3.0.7, cc 1.6.0→1.7.0, written by `cargo build --bins
+--features live`). `src/`, `contracts/`, and `tests/` are byte-identical,
+so the deployed executor
+(`0xbF29E9802e246d770f2662d76b0726D5B252515a`) and every D1–D12
+on-chain outcome are unaffected: dependency metadata changes no
+runtime behavior, and no drill transaction passes through the gated
+binary (all submits are the user's `cast send`). The drill manifest
+is re-sealed at `f6b3963` (same profile hash, refreshed `cargo_lock`
+hash); the new binary path is proven separately by the honest re-arm
+at the new commit plus `--emit-evidence`. Therefore D1–D12 hashes
+stand as G3 exit evidence without re-running the drill.
