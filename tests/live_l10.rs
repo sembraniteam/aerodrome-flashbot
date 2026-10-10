@@ -127,7 +127,7 @@ fn tripped_breaker_blocks_sender_preflight() {
     // L7 -> L6 wiring: a persisted trip refuses new submissions.
     let dir = std::env::temp_dir().join("aero-live-l10-breaker");
     let _ = std::fs::remove_dir_all(&dir);
-    let mut b = Breaker::load(&dir, "test").expect("fresh");
+    let mut b = Breaker::load(&dir).expect("fresh");
     b.trip(TripReason::DriftBeyondBand).expect("trips");
     let exec = OnchainExecutor {
         executor: base_flash_arb::config::addresses::BALANCER_VAULT,
@@ -191,7 +191,7 @@ fn p4_submit_book_reconcile_evidenced_offline() {
     let dir = std::env::temp_dir().join("aero-live-l10-p4-happy");
     let _ = std::fs::remove_dir_all(&dir);
     let mut nonces = NonceManager::new(3);
-    let mut breaker = Breaker::load(&dir, "test").expect("fresh");
+    let mut breaker = Breaker::load(&dir).expect("fresh");
     let pending = exec
         .submit(fresh_intent(), false, &ok, &mut nonces)
         .expect("submit binds");
@@ -223,7 +223,7 @@ fn p4_submit_book_reconcile_evidenced_offline() {
     // trips a fresh breaker with the TripReason returned.
     let dir = std::env::temp_dir().join("aero-live-l10-p4-refuse");
     let _ = std::fs::remove_dir_all(&dir);
-    let mut breaker = Breaker::load(&dir, "test").expect("fresh");
+    let mut breaker = Breaker::load(&dir).expect("fresh");
     breaker
         .trip(TripReason::ConsecutiveFailures)
         .expect("trips");
@@ -239,7 +239,7 @@ fn p4_submit_book_reconcile_evidenced_offline() {
     // reconcile mismatch returns the TripReason while tripping.
     let dir2 = std::env::temp_dir().join("aero-live-l10-p4-reconcile");
     let _ = std::fs::remove_dir_all(&dir2);
-    let mut breaker2 = Breaker::load(&dir2, "test").expect("fresh");
+    let mut breaker2 = Breaker::load(&dir2).expect("fresh");
     let pending = exec
         .submit(fresh_intent(), false, &ok, &mut NonceManager::new(0))
         .expect("binds");

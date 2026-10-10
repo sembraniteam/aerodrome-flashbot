@@ -125,11 +125,13 @@ where
             .into_future()
             .await
             .map_err(|e| e.to_string())?;
+        let max_flash_usdc = u64::try_from(max_flash)
+            .map_err(|_| format!("maxFlashUSDC {max_flash} exceeds u64 (fail closed)"))?;
         Ok::<_, String>(RoleMatrix {
             owner,
             operator,
             pauser,
-            max_flash_usdc: u64::try_from(max_flash).unwrap_or(u64::MAX),
+            max_flash_usdc,
         })
     };
     tokio::time::timeout(Duration::from_secs(15), call)

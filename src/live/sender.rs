@@ -431,7 +431,7 @@ mod tests {
         let dir = std::env::temp_dir().join("aero-sender-test-reconcile");
         let _ = std::fs::remove_dir_all(&dir);
         // Per-tx: exact pass.
-        let mut b = Breaker::load(&dir, "c").expect("fresh");
+        let mut b = Breaker::load(&dir).expect("fresh");
         assert!(reconcile_and_trip(&mut b, 1_000_000, 1_000_000, 0).is_ok());
         assert!(b.check().is_ok(), "pass leaves breaker clear");
         // Per-tx: mismatch trips with the reason returned to the caller.
@@ -441,13 +441,13 @@ mod tests {
         );
         assert!(b.check().is_err(), "mismatch trips");
         // Trip persists: a restart stays stopped (no new trade allowed).
-        let b2 = Breaker::load(&dir, "c").expect("reloads");
+        let b2 = Breaker::load(&dir).expect("reloads");
         assert_eq!(b2.is_tripped(), Some(TripReason::ReconcileMismatch));
         let _ = std::fs::remove_dir_all(&dir);
         // Daily shape: aggregated totals within tolerance pass.
         let dir2 = std::env::temp_dir().join("aero-sender-test-reconcile-daily");
         let _ = std::fs::remove_dir_all(&dir2);
-        let mut b3 = Breaker::load(&dir2, "c").expect("fresh");
+        let mut b3 = Breaker::load(&dir2).expect("fresh");
         assert!(reconcile_and_trip(&mut b3, 50_000_000, 49_999_500, 1_000).is_ok());
         assert!(b3.check().is_ok());
         let _ = std::fs::remove_dir_all(&dir2);

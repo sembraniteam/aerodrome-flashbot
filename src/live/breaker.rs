@@ -106,7 +106,7 @@ impl Breaker {
 
     /// Load persisted state. Missing file = fresh (never tripped);
     /// unreadable/corrupt file = tripped (fail closed on ambiguity).
-    pub fn load(ledger_dir: &Path, commit: &str) -> Result<Self, BreakerError> {
+    pub fn load(ledger_dir: &Path) -> Result<Self, BreakerError> {
         let path = Self::path_for(ledger_dir);
         let tripped = match std::fs::read_to_string(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -116,7 +116,6 @@ impl Breaker {
                 Err(_) => Some(TripReason::CorruptState),
             },
         };
-        let _ = commit;
         Ok(Self {
             state_path: path,
             tripped,
@@ -189,13 +188,13 @@ mod tests {
     fn trips_and_persists_across_restarts() {
         // L10: breaker trips and persists; first trip wins.
         let dir = tmpdir("aero-breaker-test-persist");
-        let mut b = Breaker::load(&dir, "c").expect("fresh");
+        let mut b = Breaker::load(&dir).expect("fresh");
         assert!(b.check().is_ok());
         b.trip(TripReason::ReconcileMismatch).expect("trips");
         assert_eq!(b.check(), Err(BreakerError::Tripped("reconcile-mismatch")));
         b.trip(TripReason::DailyLossCap)
             .expect("second trip is a no-op");
-        let b2 = Breaker::load(&dir, "c").expect("reloads");
+        let b2 = Breaker::load(&dir).expect("reloads");
         assert_eq!(b2.is_tripped(), Some(TripReason::ReconcileMismatch));
         assert!(b2.check().is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -205,7 +204,7 @@ mod tests {
     fn corrupt_state_fails_closed() {
         let dir = tmpdir("aero-breaker-test-corrupt");
         std::fs::write(dir.join("breaker.json"), "{not json").expect("write");
-        let b = Breaker::load(&dir, "c").expect("loads as tripped");
+        let b = Breaker::load(&dir).expect("loads as tripped");
         assert_eq!(b.is_tripped(), Some(TripReason::CorruptState));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -214,7 +213,7 @@ mod tests {
     fn reset_is_owner_only_with_reason() {
         // L10: ledger-persisted owner-only reset.
         let dir = tmpdir("aero-breaker-test-reset");
-        let mut b = Breaker::load(&dir, "c").expect("fresh");
+        let mut b = Breaker::load(&dir).expect("fresh");
         b.trip(TripReason::ManualKill).expect("trips");
         assert_eq!(
             b.reset(ResetRole::Other, "mallory"),
@@ -228,7 +227,7 @@ mod tests {
         assert!(event.contains("manual-kill"));
         assert!(b.check().is_ok());
         // Reset persists: a restart stays untripped.
-        let b2 = Breaker::load(&dir, "c").expect("reloads");
+        let b2 = Breaker::load(&dir).expect("reloads");
         assert!(b2.check().is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }

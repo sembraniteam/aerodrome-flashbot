@@ -18,3 +18,6 @@ artifacts
 /out
 /cache
 /broadcast
+
+forge-*.log
+fork-*.log

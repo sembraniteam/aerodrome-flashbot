@@ -144,6 +144,9 @@ pub fn run_presubmit(inputs: PresubmitInputs<'_>) -> Result<ApprovedIntent, Pres
     }
     match (inputs.head, inputs.last_head) {
         (Some(h), Some(last)) if h.saturating_add(inputs.max_head_age) >= last => {}
+        // First observation: no prior head to agree with, so the freshness
+        // arm passes vacuously. Two-sided agreement applies from the second
+        // observation onward.
         (Some(_), None) => {}
         _ => {
             return Err(PresubmitReject::at(

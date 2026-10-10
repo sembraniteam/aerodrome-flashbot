@@ -57,24 +57,51 @@ pub enum LedgerError {
 /// Field-name fragments that must never enter the ledger.
 const FORBIDDEN_FRAGMENTS: &[&str] = &["private_key", "secret", "rpc_url", "webhook"];
 
+fn field_name_forbidden(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower.contains("key") || FORBIDDEN_FRAGMENTS.iter().any(|f| lower.contains(f))
+}
+
+fn check_value(top_key: &str, value: &Value, blocklist: &[String]) -> Result<(), LedgerError> {
+    match value {
+        Value::String(s) => {
+            if blocklist.iter().any(|b| !b.is_empty() && s.contains(b)) {
+                return Err(LedgerError::BlocklistedValue(top_key.to_string()));
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for item in items {
+                check_value(top_key, item, blocklist)?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for (k, v) in map {
+                if field_name_forbidden(k) {
+                    return Err(LedgerError::ForbiddenField(format!("{top_key}.{k}")));
+                }
+                check_value(top_key, v, blocklist)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn check_body(body: &Value, blocklist: &[String]) -> Result<(), LedgerError> {
+    // Bodies are flat today, but the scan is recursive so secrets nested
+    // inside an object/array value cannot bypass the boundary.
     let obj = body.as_object().cloned().unwrap_or_default();
     for (key, value) in &obj {
         let lower = key.to_ascii_lowercase();
         // Owner/operator/pauser *addresses* are fine; key material is not.
         let is_role_address =
             (lower == "owner" || lower == "operator" || lower == "pauser") && value.is_string();
-        if !is_role_address
-            && (key.to_ascii_lowercase().contains("key")
-                || FORBIDDEN_FRAGMENTS.iter().any(|f| lower.contains(f)))
-        {
+        if !is_role_address && field_name_forbidden(key) {
             return Err(LedgerError::ForbiddenField(key.clone()));
         }
-        if let Some(s) = value.as_str()
-            && blocklist.iter().any(|b| !b.is_empty() && s.contains(b))
-        {
-            return Err(LedgerError::BlocklistedValue(key.clone()));
-        }
+        check_value(key, value, blocklist)?;
     }
     Ok(())
 }

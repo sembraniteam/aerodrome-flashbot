@@ -2,9 +2,9 @@
 //!
 //! - Requires `--features live` (`required-features` in `Cargo.toml`); the
 //!   paper build cannot link this target.
-//! - Strict startup order: L1 lock -> role read-back (L4) -> float-cap
-//!   check -> signer construction LAST. No key or KMS handle exists before
-//!   L1 passes.
+//! - Strict startup order: kill-switch/breaker pre-checks (L7) -> L1
+//!   lock -> role read-back (L4) -> float-cap check -> signer
+//!   construction LAST. No key or KMS handle exists before L1 passes.
 //! - P4 scope: lock + read-only verification + `--emit-evidence` +
 //!   `ledger verify` + the OFFLINE submit/booking/reconcile state machine
 //!   (`sender::submit` consumes an `ApprovedIntent`; `book_receipt` gates on
@@ -128,6 +128,20 @@ async fn run_startup(args: &Args) -> anyhow::Result<()> {
         config = %args.config.display(),
         "live profile loaded"
     );
+    // Kill switch and breaker FIRST (L7): fail closed before any RPC
+    // read-back or key material enters memory. Previously these ran after
+    // `startup_sequence` (which constructs the signer last); a two-line
+    // file check refuses stopped states without touching keys.
+    if !breaker::kill_switch_allows(&profile.live_section.kill_switch_file) {
+        anyhow::bail!(
+            "refusing to arm: kill switch engaged (flag file {} missing or not OK)",
+            profile.live_section.kill_switch_file.display()
+        );
+    }
+    let breaker_state = Breaker::load(&profile.live_section.ledger_dir)?;
+    if let Some(reason) = breaker_state.is_tripped() {
+        anyhow::bail!("refusing to arm: breaker tripped ({})", reason.as_str());
+    }
     let manifest_path = args.manifest.as_ref().ok_or_else(|| {
         anyhow::anyhow!("refusing to start: --manifest is required (L1 manifest lock)")
     })?;
@@ -198,29 +212,15 @@ async fn run_startup(args: &Args) -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("live lock refused startup: {e}"))?;
     debug_assert!(probe.signer_step_reached);
 
-    // Kill switch must allow arming (fresh checkouts without the flag file
-    // refuse: unreadable means stopped).
-    if !breaker::kill_switch_allows(&profile.live_section.kill_switch_file) {
-        anyhow::bail!(
-            "refusing to arm: kill switch engaged (flag file {} missing or not OK)",
-            profile.live_section.kill_switch_file.display()
-        );
-    }
-    // Breaker must be untripped (state persists across restarts).
-    let breaker_state = Breaker::load(&profile.live_section.ledger_dir, "")?;
-    if let Some(reason) = breaker_state.is_tripped() {
-        anyhow::bail!("refusing to arm: breaker tripped ({})", reason.as_str());
-    }
-
     // Ledger: record the arming as an operator action (L8), then report.
     // The operator blocklist guards the append boundary: any body field
     // containing the operator value (either paste form) is refused naming
     // the field only (see `live::ledger` + `signer::SecretBlocklist`).
-    // Built HERE -- after the lock sequence (L1 -> roles -> float ->
-    // signer-last) plus the kill-switch and breaker checks all passed --
-    // so no key material enters memory for redaction before L1 passes
-    // (the only earlier reader is the signer constructor itself, last in
-    // the sequence, which owns its buffers and zeroizes them).
+    // Built HERE -- after the kill-switch/breaker pre-checks plus the lock
+    // sequence (L1 -> roles -> float -> signer-last) all passed -- so no
+    // key material enters memory for redaction before L1 passes (the only
+    // earlier reader is the signer constructor itself, last in the
+    // sequence, which owns its buffers and zeroizes them).
     let op_secrets = SecretBlocklist::from_process_env();
     let mut ledger = Ledger::open(&profile.live_section.ledger_dir, op_secrets.to_vec())?;
     ledger.append(
